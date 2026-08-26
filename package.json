@@ -1,0 +1,45 @@
+{
+  "name": "nexyronix-solutions-website",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && tsc -p tsconfig.node.json",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "start": "tsx server/index.ts"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.169.0",
+    "@react-three/fiber": "^8.17.10",
+    "@react-three/drei": "^9.114.3",
+    "nodemailer": "^9.0.5",
+    "express": "^4.21.1",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.169.0",
+    "@types/node": "^22.9.0",
+    "@types/nodemailer": "^6.4.16",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "@types/express": "^4.17.21"
+  },
+  "notes": {
+    "three-stack": "three / @react-three/fiber / @react-three/drei power the Phase 2 hero and Phase 4 technology universe. Lazy-loaded — only fetched when WebGL is available and reduced-motion is off.",
+    "framer-motion": "REMOVED in Phase 12. It was declared in Phase 1 but never imported — every animation is CSS-level (Tailwind keyframes) or useFrame inside the 3D scenes.",
+    "server": "server/index.ts serves dist/ and hosts /api/contact on one origin for Railway. It imports the same handler as the serverless deployment, so contact logic exists once."
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

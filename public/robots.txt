@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# The enquiry endpoint should never be crawled.
+Disallow: /api/
+
+Sitemap: https://nexyronix.com/sitemap.xml

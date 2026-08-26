@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Single-page site: all content lives on / as in-page sections, so there is one
+  URL. Section anchors are deliberately NOT listed as separate <url> entries —
+  search engines treat them as the same document and listing them adds noise.
+  Update the domain here if you deploy somewhere other than nexyronix.com.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://nexyronix.com/</loc>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>

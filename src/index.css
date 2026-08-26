@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   NEXYRONIX DESIGN SYSTEM — TOKENS
+   Change values here to retheme the entire product. Nothing else in the
+   codebase should hardcode a color, radius, or shadow.
+   ========================================================================== */
+:root {
+  /* ---- Surfaces ---------------------------------------------------- */
+  --color-bg: #05070a;            /* primary background — near black, cool undertone */
+  --color-bg-secondary: #090c12;  /* alternate section background */
+  --color-bg-elevated: #0b0f17;   /* elevated panels, navbar on scroll */
+
+  --color-surface: #0d1119;       /* card / panel surface */
+  --color-surface-hover: #121826; /* card hover state */
+
+  /* ---- Borders -------------------------------------------------------- */
+  --color-border: #1b2230;        /* default hairline border */
+  --color-border-strong: #2a3448; /* emphasized border / active state */
+
+  /* ---- Text ------------------------------------------------------------ */
+  --color-text: #edf1f6;          /* primary text — soft white, not pure #fff */
+  --color-text-muted: #93a0b4;    /* secondary / supporting text */
+  --color-text-faint: #576076;    /* tertiary / disabled / meta text */
+
+  /* ---- Accents ----------------------------------------------------- */
+  --color-accent-primary: #2e7cf6; /* electric blue — primary CTA / interactive */
+  --color-accent-cyan: #45e0e8;    /* cyan — highlights, glows, data accents */
+  --color-accent-violet: #7c6fe8;  /* subtle violet — rare, secondary emphasis only */
+
+  --color-status-online: #34d399;  /* small system/status indicators */
+
+  /* ---- Radius --------------------------------------------------------- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* ---- Shadows & glows ------------------------------------------------ */
+  --shadow-card: 0 1px 0 0 rgba(255, 255, 255, 0.03) inset, 0 20px 50px -20px rgba(0, 0, 0, 0.6);
+  --shadow-raised: 0 30px 80px -30px rgba(0, 0, 0, 0.75);
+  --glow-primary: 0 0 0 1px rgba(46, 124, 246, 0.25), 0 0 32px rgba(46, 124, 246, 0.22);
+  --glow-cyan: 0 0 0 1px rgba(69, 224, 232, 0.2), 0 0 32px rgba(69, 224, 232, 0.16);
+  --glow-violet: 0 0 0 1px rgba(124, 111, 232, 0.2), 0 0 32px rgba(124, 111, 232, 0.14);
+
+  /* ---- Typography ------------------------------------------------------ */
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  /* ---- Motion ----------------------------------------------------------- */
+  --ease-signature: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ==========================================================================
+   BASE
+   ========================================================================== */
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+body {
+  background-color: var(--color-bg);
+  font-feature-settings: "ss01" on, "cv01" on;
+  overflow-x: hidden;
+}
+
+::selection {
+  background-color: rgba(46, 124, 246, 0.35);
+  color: #fff;
+}
+
+/* Visible, on-brand focus ring for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--color-accent-cyan);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* Slim, quiet scrollbar that matches the dark surface */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--color-bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-faint);
+}
+html {
+  scrollbar-color: var(--color-border-strong) var(--color-bg);
+  scrollbar-width: thin;
+}
+
+/* ==========================================================================
+   COMPONENT-LEVEL PRIMITIVES
+   Small, composable classes used across the design system. Keep these
+   generic — page-specific styling belongs in components, not here.
+   ========================================================================== */
+@layer components {
+  /* Eyebrow / kicker label — mono, tracked, muted. Used to label a section
+     with a short technical tag rather than decorate it. */
+  .label-eyebrow {
+    @apply font-mono text-xs uppercase tracking-[0.18em] text-text-faint;
+  }
+
+  /* Hairline divider that reads as a circuit trace rather than a plain rule */
+  .divider-signature {
+    @apply h-px w-full bg-gradient-to-r from-transparent via-border-strong to-transparent;
+  }
+}
