@@ -12,9 +12,19 @@
  * - Rate limited per IP. Body size capped. Honeypot checked.
  * - Credentials come from environment variables only — never from source.
  * - Error responses are generic; internal failures are logged server-side only.
+ *
+ * EMAIL DELIVERY
+ * Sends via the Resend HTTPS API (fetch, no SDK dependency), not SMTP.
+ * Railway blocks outbound SMTP (ports 25/465/587/2525) on every plan below
+ * Pro — confirmed by testing against two different providers (a mailbox and
+ * a transactional-email service) from this exact deployment, both failing
+ * identically with an ETIMEDOUT at the TCP-connect stage. An HTTPS API call
+ * isn't affected, since only the SMTP-specific ports are blocked. If you're
+ * on Railway Pro (or a host that doesn't block SMTP) and want to go back to
+ * generic SMTP for provider flexibility, swap deliverEnquiry() back to a
+ * nodemailer transport — nothing else in this file needs to change.
  */
 
-import nodemailer from "nodemailer";
 import {
   validateEnquiry,
   hasErrors,
@@ -262,41 +272,55 @@ function buildEnquiryEmail(
   return { subject, html, text };
 }
 
-async function deliverEnquiry(payload: EnquiryPayload, submittedAt: Date): Promise<void> {
-  const host = requireEnv("SMTP_HOST");
-  const port = Number(process.env.SMTP_PORT ?? 587);
-  const user = requireEnv("SMTP_USER");
-  const pass = requireEnv("SMTP_PASSWORD");
-  const to = requireEnv("CONTACT_EMAIL");
+const RESEND_TIMEOUT_MS = 10_000;
 
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465, // implicit TLS on 465, STARTTLS otherwise
-    auth: { user, pass },
-    // Nodemailer's defaults (multi-minute socket timeout) mean a blocked or
-    // unreachable SMTP endpoint hangs the whole request instead of failing —
-    // the visitor sees an endless spinner, and nothing gets logged until the
-    // default timeout eventually fires. Fail fast instead: 10s to connect,
-    // 10s for the greeting, 15s of overall socket inactivity.
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000,
-  });
+async function deliverEnquiry(payload: EnquiryPayload, submittedAt: Date): Promise<void> {
+  const apiKey = requireEnv("RESEND_API_KEY");
+  const to = requireEnv("CONTACT_EMAIL");
+  // SMTP_FROM is a holdover name from the SMTP-based version of this
+  // function — kept so an already-configured deployment doesn't need a new
+  // variable just for this. From must be an address on a domain Resend has
+  // verified; using the submitter's address here would fail DMARC/SPF or be
+  // rejected outright. Their address goes in reply_to instead.
+  const from = requireEnv("SMTP_FROM");
 
   const { subject, html, text } = buildEnquiryEmail(payload, submittedAt);
 
-  await transporter.sendMail({
-    // From must be a domain/address the SMTP provider has verified — using the
-    // submitter's address here would fail SPF/DKIM or be rejected outright.
-    // Their address goes in replyTo instead, so replies still reach them.
-    from: safeHeader(process.env.SMTP_FROM || `Nexyronix Solutions Private Limited <${user}>`),
-    to: safeHeader(to),
-    replyTo: safeHeader(payload.email),
-    subject: safeHeader(subject),
-    text,
-    html,
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RESEND_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: safeHeader(from),
+        to: [safeHeader(to)],
+        reply_to: safeHeader(payload.email),
+        subject: safeHeader(subject),
+        text,
+        html,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Resend request timed out after ${RESEND_TIMEOUT_MS}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    // Read the body for the server-side log only — never forwarded to the client.
+    const detail = await response.text().catch(() => "");
+    throw new Error(`Resend API responded ${response.status}: ${detail.slice(0, 500)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

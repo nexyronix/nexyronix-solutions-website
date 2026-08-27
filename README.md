@@ -8,7 +8,7 @@ that hosts both the static build and the enquiry API.
 
 ```bash
 npm install
-cp .env.example .env      # fill in SMTP values
+cp .env.example .env      # fill in RESEND_API_KEY / CONTACT_EMAIL / SMTP_FROM
 npm run dev               # frontend only (no /api)
 ```
 
@@ -37,11 +37,8 @@ sets. Both paths import the *same* handler, so there is one implementation.
 | Variable | Required | Purpose |
 |---|---|---|
 | `CONTACT_EMAIL` | yes | Where enquiries are delivered |
-| `SMTP_HOST` | yes | SMTP server |
-| `SMTP_PORT` | yes | 587 (STARTTLS) or 465 (TLS) |
-| `SMTP_USER` | yes | SMTP username |
-| `SMTP_PASSWORD` | yes | SMTP password |
-| `SMTP_FROM` | no | From address; defaults to `SMTP_USER` |
+| `RESEND_API_KEY` | yes | [Resend](https://resend.com) API key. Sent via HTTPS, not SMTP — Railway blocks outbound SMTP ports below its Pro plan; see the note in `api/contact.ts` |
+| `SMTP_FROM` | yes | From address; must be on a domain Resend has verified. Name kept from the earlier SMTP-based version |
 | `DATABASE_URL` | no | Enables the optional enquiry storage hook |
 | `VITE_SITE_URL` | no | Canonical origin; defaults to `https://nexyronix.com` |
 | `VITE_CONTACT_EMAIL` | no | Public contact email (rendered only if set) |
@@ -49,7 +46,7 @@ sets. Both paths import the *same* handler, so there is one implementation.
 | `VITE_CONTACT_LOCATION` | no | Public location (rendered only if set) |
 | `PORT` | no | Injected by Railway |
 
-Only `VITE_`-prefixed values reach the browser. SMTP credentials and
+Only `VITE_`-prefixed values reach the browser. `RESEND_API_KEY` and
 `DATABASE_URL` deliberately have no prefix, so Vite cannot bundle them.
 
 ## Build & type checking
@@ -75,8 +72,9 @@ it is isomorphic and must compile under both.
 
 ## Before you launch — manual steps
 
-1. **Set the SMTP variables.** Until then the form validates and then fails with
-   a friendly error. It is wired to a real endpoint, not faked.
+1. **Set `RESEND_API_KEY`, `CONTACT_EMAIL` and `SMTP_FROM`, and verify your
+   sending domain with Resend.** Until then the form validates and then fails
+   with a friendly error. It is wired to a real endpoint, not faked.
 2. **Add Privacy Policy and Terms pages.** The footer's Legal column is
    commented out because those pages don't exist. The contact form collects
    personal data, so these are a legal requirement, and the text needs to come
@@ -139,8 +137,8 @@ invented**. `ContactInfo.tsx` reads `VITE_CONTACT_EMAIL`, `VITE_CONTACT_PHONE` a
 shows a short "will appear here once configured" note. There is no fake placeholder that could
 reach production by accident.
 
-Note the `VITE_` prefix: those three are *public* by design and shipped to the browser. The SMTP
-credentials and `DATABASE_URL` deliberately have no prefix, so Vite will never bundle them.
+Note the `VITE_` prefix: those three are *public* by design and shipped to the browser. The
+`RESEND_API_KEY` and `DATABASE_URL` deliberately have no prefix, so Vite will never bundle them.
 
 ## Note on the internship path
 
