@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef, type MutableRefObject } from "react";
+import { Suspense, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { DigitalCore } from "./DigitalCore";
@@ -20,6 +20,52 @@ const TIER_CONFIG: Record<
   low: { particles: 220, nodes: 4, coreDetail: 0, labels: false },
 };
 
+/**
+ * How far back the camera sits, as a function of viewport width — i.e. how
+ * much to shrink the whole assembly (core + orbit nodes + particles).
+ *
+ * The camera FOV is fixed, so the assembly's on-screen size stays constant
+ * in pixels regardless of viewport width — on a narrower canvas it eats a
+ * much bigger fraction of the frame. Backing the camera off gives the CSS
+ * shift in Hero.tsx room to work on both sides.
+ *
+ * This is deliberately a camera-distance change, not a world-space X offset
+ * on the content. The orbit nodes sit at different camera distances (see
+ * nodeData's fibonacciSphere) — a world-space X offset gets amplified
+ * differently per node by perspective (the nearest node overshoots far more
+ * than the farthest one for an identical offset, which is what sent "CLOUD"
+ * off-screen while "DATA" was still clearing text correctly). A camera
+ * distance change scales every node's projection uniformly regardless of
+ * its depth, so it doesn't have that problem. The actual left/right shift
+ * is applied once, in screen space, via CSS in Hero.tsx.
+ */
+function computeCameraDistance(width: number): number {
+  if (width < 768) return 6.2;
+  const t = Math.min(1, (width - 768) / (1920 - 768));
+  return 16 - t * 8; // 16 at 768px → 8 at 1920px+
+}
+
+function useCameraDistance() {
+  const [distance, setDistance] = useState(() =>
+    computeCameraDistance(typeof window === "undefined" ? 1920 : window.innerWidth)
+  );
+
+  useEffect(() => {
+    let frame: number;
+    const onResize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setDistance(computeCameraDistance(window.innerWidth)));
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  return distance;
+}
+
 /** Moves the camera a little toward the pointer each frame — the "alive" feeling, kept subtle. */
 function CameraRig({ pointer }: { pointer: MutableRefObject<{ x: number; y: number }> }) {
   const { camera } = useThree();
@@ -38,6 +84,7 @@ function CameraRig({ pointer }: { pointer: MutableRefObject<{ x: number; y: numb
 export function HeroScene({ tier, onReady }: HeroSceneProps) {
   const pointer = useRef({ x: 0, y: 0 });
   const config = TIER_CONFIG[tier];
+  const distanceZ = useCameraDistance();
 
   useEffect(() => {
     function handlePointerMove(e: PointerEvent) {
@@ -51,7 +98,7 @@ export function HeroScene({ tier, onReady }: HeroSceneProps) {
   return (
     <Canvas
       dpr={[1, tier === "high" ? 2 : 1.5]}
-      camera={{ position: [0, 0, 6.2], fov: 42 }}
+      camera={{ position: [0, 0, distanceZ], fov: 42 }}
       gl={{ antialias: true, powerPreference: "high-performance" }}
       onCreated={() => onReady?.()}
     >

@@ -23,17 +23,24 @@ export function Hero() {
 
   return (
     <section id="home" className="relative min-h-[100svh] overflow-hidden pt-18">
-      {/* Layer 0 — 3D scene (or its static, motion-free substitute). Shifted right on
-          larger screens so the sphere and its orbit nodes clear the hero copy instead
-          of sitting behind it. */}
-      <div className="absolute inset-0 xl:translate-x-[170px] 2xl:translate-x-[260px]">
+      {/* Layer 0 — 3D scene (or its static, motion-free substitute). HeroScene
+          zooms its camera out on narrower screens so the assembly shrinks
+          (see its computeCameraDistance); the actual left/right shift to
+          clear the hero copy is applied here, uniformly, in screen space —
+          not in 3D world space, which perspective-amplifies unevenly across
+          nodes at different camera depths. HeroFallback is plain CSS and
+          gets the same shift directly since it isn't camera-driven. */}
+      <div className="absolute inset-0">
         {canRender3D ? (
           <>
-            <HeroFallback />
+            <div className="absolute inset-0 md:translate-x-[150px] lg:translate-x-[325px]">
+              <HeroFallback />
+            </div>
             <Suspense fallback={null}>
               <div
                 className={cn(
                   "absolute inset-0 transition-opacity duration-700 ease-signature",
+                  "md:translate-x-[150px] lg:translate-x-[325px]",
                   sceneReady ? "opacity-100" : "opacity-0"
                 )}
               >
@@ -42,7 +49,9 @@ export function Hero() {
             </Suspense>
           </>
         ) : (
-          <HeroFallback />
+          <div className="absolute inset-0 md:translate-x-[150px] lg:translate-x-[325px]">
+            <HeroFallback />
+          </div>
         )}
       </div>
 
