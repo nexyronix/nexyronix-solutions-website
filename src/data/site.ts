@@ -47,7 +47,7 @@ export const CONTACT_PHONE_DISPLAY = import.meta.env.VITE_CONTACT_PHONE || "+91 
 
 export const CONTACT_LOCATION =
   import.meta.env.VITE_CONTACT_LOCATION ||
-  "80, 4th Floor, Mango Meadows Layout, North Main Gate, Bidarahalli, 560049";
+  "80, 4th Floor, Mango Meadows Layout, North Main Gate, Bidarahalli, Bengaluru 560049";
 
 /**
  * Digits-only, E.164-style number (no "+", no spaces) — the format tel: and
