@@ -274,6 +274,14 @@ async function deliverEnquiry(payload: EnquiryPayload, submittedAt: Date): Promi
     port,
     secure: port === 465, // implicit TLS on 465, STARTTLS otherwise
     auth: { user, pass },
+    // Nodemailer's defaults (multi-minute socket timeout) mean a blocked or
+    // unreachable SMTP endpoint hangs the whole request instead of failing —
+    // the visitor sees an endless spinner, and nothing gets logged until the
+    // default timeout eventually fires. Fail fast instead: 10s to connect,
+    // 10s for the greeting, 15s of overall socket inactivity.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
   });
 
   const { subject, html, text } = buildEnquiryEmail(payload, submittedAt);
