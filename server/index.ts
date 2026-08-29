@@ -68,8 +68,10 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Body limit mirrors the cap enforced inside the handler.
-app.use(express.json({ limit: "16kb" }));
+// Body limit mirrors the cap enforced inside the handler. Sized for a
+// base64-encoded resume attachment (up to 5 MB raw, ~37% larger encoded)
+// plus the rest of the form fields — see api/contact.ts's MAX_BODY_BYTES.
+app.use(express.json({ limit: "8mb" }));
 
 // Malformed JSON should be a clean 400, not an unhandled crash.
 app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {

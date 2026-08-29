@@ -29,7 +29,12 @@ import {
   validateEnquiry,
   hasErrors,
   LIMITS,
+  RESUME_ALLOWED_EXTENSIONS,
+  RESUME_MAX_BYTES,
+  RESUME_MIME_TYPES,
+  RESUME_ENQUIRY_TYPES,
   type EnquiryPayload,
+  type ResumeAttachment,
 } from "../src/shared/enquiry";
 
 /** Minimal request/response shape so this compiles without a framework dependency. */
@@ -46,7 +51,10 @@ export interface ApiResponse {
   setHeader: (name: string, value: string) => void;
 }
 
-const MAX_BODY_BYTES = 16 * 1024; // 16 KB — generous for text, hostile to abuse
+// A resume, base64-encoded (~37% larger than the original), can legitimately
+// be close to RESUME_MAX_BYTES (5 MB) on its own; the cap here has headroom
+// on top of that for the encoding overhead plus the rest of the form fields.
+const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB
 
 // ---------------------------------------------------------------------------
 // Rate limiting
@@ -115,6 +123,107 @@ function safeHeader(value: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Resume upload
+//
+// Never stored: validated here and attached directly to the notification
+// email (see deliverEnquiry), so there's no private file to secure, expose,
+// or clean up later. This is Node-only (uses Buffer), which is why it lives
+// here rather than in the isomorphic src/shared/enquiry.ts — the client's
+// own checks in ResumeUploadField.tsx are a UX courtesy only, never trusted.
+// ---------------------------------------------------------------------------
+
+type ResumeExt = (typeof RESUME_ALLOWED_EXTENSIONS)[number];
+
+/**
+ * Checks the actual leading bytes against each format's real signature — an
+ * extension check alone is defeated by renaming a .exe to .pdf, which costs
+ * an attacker nothing. DOCX is itself a ZIP archive, so this only confirms
+ * "is a ZIP file" for that one; fully validating its internal structure
+ * would need real ZIP parsing, which is more than a resume upload warrants.
+ * PDF and DOC (legacy binary/OLE2) are fully verified.
+ */
+function matchesFileSignature(buffer: Buffer, ext: ResumeExt): boolean {
+  switch (ext) {
+    case "pdf":
+      return buffer.subarray(0, 4).toString("latin1") === "%PDF";
+    case "doc":
+      return buffer
+        .subarray(0, 8)
+        .equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+    case "docx":
+      return buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  }
+}
+
+/** Never the user-supplied filename — that could carry path-traversal characters or arbitrary unicode. */
+function safeResumeFilename(name: string, ext: ResumeExt): string {
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "applicant";
+  return `resume-${slug}-${Date.now()}.${ext}`;
+}
+
+/**
+ * Returns a field error if the resume is present but invalid, and — only
+ * when it's genuinely valid — a fully re-derived attachment (safe generated
+ * filename, our own canonical MIME type, the original bytes) ready to hand
+ * to Resend. Silently drops the resume (no error) if it wasn't offered for
+ * this enquiry type at all, matching the client's own conditional field.
+ */
+function validateResume(
+  resume: unknown,
+  enquiryType: string,
+  applicantName: string
+): { error?: string; attachment?: ResumeAttachment } {
+  if (resume === undefined || resume === null) return {};
+
+  if (!RESUME_ENQUIRY_TYPES.includes(enquiryType as (typeof RESUME_ENQUIRY_TYPES)[number])) {
+    return {};
+  }
+
+  if (
+    typeof resume !== "object" ||
+    typeof (resume as Partial<ResumeAttachment>).filename !== "string" ||
+    typeof (resume as Partial<ResumeAttachment>).base64 !== "string"
+  ) {
+    return { error: "Please upload a valid resume file." };
+  }
+
+  const { filename, base64 } = resume as ResumeAttachment;
+
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  if (!RESUME_ALLOWED_EXTENSIONS.includes(ext as ResumeExt)) {
+    return { error: "Please upload a PDF, DOC or DOCX file." };
+  }
+
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(base64, "base64");
+  } catch {
+    return { error: "We couldn't read that file. Please try again." };
+  }
+
+  if (buffer.length === 0 || buffer.length > RESUME_MAX_BYTES) {
+    return { error: `Please keep your resume under ${RESUME_MAX_BYTES / (1024 * 1024)} MB.` };
+  }
+
+  if (!matchesFileSignature(buffer, ext as ResumeExt)) {
+    return { error: "That file doesn't look like a valid resume." };
+  }
+
+  return {
+    attachment: {
+      filename: safeResumeFilename(applicantName, ext as ResumeExt),
+      mimeType: RESUME_MIME_TYPES[ext as ResumeExt],
+      base64,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
@@ -166,6 +275,15 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   };
 
   const errors = validateEnquiry(payload);
+
+  const { error: resumeError, attachment: resume } = validateResume(
+    body.resume,
+    payload.enquiryType,
+    payload.name
+  );
+  if (resumeError) errors.resume = resumeError;
+  if (resume) payload.resume = resume;
+
   if (hasErrors(errors)) {
     res.status(400).json({ ok: false, message: "Please check the highlighted fields.", errors });
     return;
@@ -204,10 +322,10 @@ function requireEnv(name: string): string {
 /**
  * The site has exactly one form (see ContactForm.tsx) — "Internship" is one
  * of its selectable enquiry types, not a separate application flow. There is
- * no college/course/graduation-year field and no resume upload anywhere in
- * this codebase (see README's "Note on the internship path"), so the
- * internship email uses only the fields that actually exist. Don't add
- * fields here that the form doesn't collect.
+ * no college/course/graduation-year field, so the internship email uses
+ * only the fields that actually exist (plus the resume, see validateResume
+ * above, which both Internship and Career Opportunity enquiries can attach).
+ * Don't add fields here that the form doesn't collect.
  */
 function isInternshipEnquiry(payload: EnquiryPayload): boolean {
   return payload.enquiryType === "Internship";
@@ -221,12 +339,15 @@ function buildEnquiryEmail(
   const dateStr = submittedAt.toISOString().slice(0, 10);
   const timeStr = `${submittedAt.toISOString().slice(11, 19)} UTC`;
 
+  const resumeRow: [string, string][] = payload.resume ? [["Resume", "Attached to this email"]] : [];
+
   const rows: [string, string][] = isInternship
     ? [
         ["Student Name", payload.name],
         ["Email", payload.email],
         ["Phone", payload.phone || "—"],
         ["College / University", payload.organization || "—"],
+        ...resumeRow,
         ["Message", payload.message],
         ["Application Date", dateStr],
         ["Application Time", timeStr],
@@ -237,6 +358,7 @@ function buildEnquiryEmail(
         ["Phone", payload.phone || "—"],
         ["Company / Organization", payload.organization || "—"],
         ["Enquiry Type", payload.enquiryType],
+        ...resumeRow,
         ["Budget", payload.budget || "—"],
         ["How They Heard About Us", payload.source || "—"],
         ["Message", payload.message],
@@ -304,6 +426,17 @@ async function deliverEnquiry(payload: EnquiryPayload, submittedAt: Date): Promi
         subject: safeHeader(subject),
         text,
         html,
+        ...(payload.resume
+          ? {
+              attachments: [
+                {
+                  filename: payload.resume.filename,
+                  content: payload.resume.base64,
+                  content_type: payload.resume.mimeType,
+                },
+              ],
+            }
+          : {}),
       }),
       signal: controller.signal,
     });

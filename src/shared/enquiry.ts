@@ -43,6 +43,39 @@ export type EnquiryType = (typeof ENQUIRY_TYPES)[number];
 export type BudgetOption = (typeof BUDGET_OPTIONS)[number];
 export type SourceOption = (typeof SOURCE_OPTIONS)[number];
 
+/**
+ * Resume upload — only offered for Internship / Career Opportunity enquiries
+ * (see ContactForm's conditional rendering). Kept optional everywhere, same
+ * as every other non-essential field on this form.
+ *
+ * Not stored anywhere: it's attached directly to the notification email and
+ * never persisted, so there's no private file to secure, expose, or clean
+ * up. See RESUME_* constants below for the enforced limits, and
+ * api/contact.ts for the actual MIME/signature/size validation — the
+ * allowlist and size cap are shared so client and server can't drift, but
+ * the real enforcement only matters server-side.
+ */
+export interface ResumeAttachment {
+  /** The uploaded file's own name — display-only. Never used as a path or trusted as-is. */
+  filename: string;
+  mimeType: string;
+  /** Base64-encoded file content, no "data:...;base64," prefix. */
+  base64: string;
+}
+
+export const RESUME_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export const RESUME_ALLOWED_EXTENSIONS = ["pdf", "doc", "docx"] as const;
+
+export const RESUME_MIME_TYPES: Record<(typeof RESUME_ALLOWED_EXTENSIONS)[number], string> = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+};
+
+/** Enquiry types a resume is actually relevant for — also gates the upload field's visibility. */
+export const RESUME_ENQUIRY_TYPES = ["Internship", "Career Opportunity"] as const;
+
 export interface EnquiryPayload {
   name: string;
   email: string;
@@ -52,6 +85,7 @@ export interface EnquiryPayload {
   budget?: string;
   source?: string;
   message: string;
+  resume?: ResumeAttachment;
   /** Honeypot — must stay empty. Real users never see this field. */
   website?: string;
 }

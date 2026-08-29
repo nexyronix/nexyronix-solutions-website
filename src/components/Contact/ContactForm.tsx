@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from "react";
 import { FormField } from "./FormField";
+import { ResumeUploadField } from "./ResumeUploadField";
 import { FormSuccess, FormError } from "./FormStatus";
 import { Button } from "@/components/ui/Button";
 import { ArrowIcon } from "@/components/ui/ArrowIcon";
@@ -9,6 +10,7 @@ import {
   ENQUIRY_TYPES,
   BUDGET_OPTIONS,
   SOURCE_OPTIONS,
+  RESUME_ENQUIRY_TYPES,
   type EnquiryPayload,
   type FieldErrors,
 } from "@/shared/enquiry";
@@ -44,12 +46,22 @@ export function ContactForm({ presetType }: ContactFormProps) {
   const inFlight = useRef(false);
 
   function setField<K extends keyof EnquiryPayload>(key: K, value: EnquiryPayload[K]) {
-    setValues((current) => ({ ...current, [key]: value }));
+    setValues((current) => {
+      const next = { ...current, [key]: value };
+      // Resume only makes sense for Internship / Career — drop it (and its
+      // error) if the enquiry type changes to something it isn't offered
+      // for, so a stale attachment can't silently ride along on submit.
+      if (key === "enquiryType" && !RESUME_ENQUIRY_TYPES.includes(value as (typeof RESUME_ENQUIRY_TYPES)[number])) {
+        next.resume = undefined;
+      }
+      return next;
+    });
     // Clear a field's error as soon as the user starts correcting it
     setErrors((current) => {
       if (!current[key]) return current;
       const next = { ...current };
       delete next[key];
+      if (key === "enquiryType") delete next.resume;
       return next;
     });
   }
@@ -168,6 +180,14 @@ export function ContactForm({ presetType }: ContactFormProps) {
           placeholderOption="Select an enquiry type"
           onChange={(v) => setField("enquiryType", v)}
         />
+
+        {RESUME_ENQUIRY_TYPES.includes(values.enquiryType as (typeof RESUME_ENQUIRY_TYPES)[number]) && (
+          <ResumeUploadField
+            value={values.resume ?? null}
+            error={errors.resume}
+            onChange={(resume) => setField("resume", resume ?? undefined)}
+          />
+        )}
 
         <FormField
           as="textarea"
