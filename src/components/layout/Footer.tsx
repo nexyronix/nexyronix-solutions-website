@@ -8,6 +8,7 @@ const LINK_GROUPS: { title: string; links: { label: string; href: string }[] }[]
     links: [
       { label: "Solutions", href: "#solutions" },
       { label: "Industries", href: "#industries" },
+      { label: "Careers", href: "#careers" },
       { label: "About", href: "#about" },
       { label: "Contact", href: "#contact" },
     ],

@@ -7,6 +7,7 @@ import { TechnologyUniverse } from "@/components/TechnologyUniverse/TechnologyUn
 import { Process } from "@/components/Process/Process";
 import { Industries } from "@/components/Industries/Industries";
 import { Internship } from "@/components/Internship/Internship";
+import { Careers } from "@/components/Careers/Careers";
 import { Technology } from "@/components/Technology/Technology";
 import { Projects } from "@/components/Projects/Projects";
 import { About } from "@/components/About/About";
@@ -23,6 +24,7 @@ export default function App() {
         <Process />
         <Industries />
         <Internship />
+        <Careers />
         <Technology />
         <Projects />
         <About />

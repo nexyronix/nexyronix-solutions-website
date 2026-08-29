@@ -16,6 +16,7 @@ export const ENQUIRY_TYPES = [
   "Automation",
   "E-Commerce",
   "Internship",
+  "Career Opportunity",
   "General Enquiry",
   "Other",
 ] as const;
