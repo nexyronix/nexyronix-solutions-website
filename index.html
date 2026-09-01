@@ -94,6 +94,20 @@
         }
       }
     </script>
+
+    <!--
+      WebSite structured data. No SearchAction — this site has no search
+      feature, and declaring one that doesn't exist would be inaccurate
+      structured data, not a genuine site capability.
+    -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Nexyronix Solutions Private Limited",
+        "url": "https://nexyronix.com/"
+      }
+    </script>
   </head>
   <body class="bg-bg text-text font-body antialiased">
     <div id="root"></div>

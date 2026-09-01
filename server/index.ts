@@ -10,6 +10,7 @@
  */
 
 import express from "express";
+import compression from "compression";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import contactHandler, { type ApiRequest, type ApiResponse } from "../api/contact";
@@ -31,6 +32,11 @@ app.set("trust proxy", 1);
 
 // Don't advertise the framework.
 app.disable("x-powered-by");
+
+// Gzip/brotli text responses (HTML/CSS/JS/JSON) — meaningfully smaller
+// transfers for near-zero cost. Images/fonts are already compressed formats
+// and this middleware skips them on its own.
+app.use(compression());
 
 /**
  * Security headers.
@@ -106,10 +112,20 @@ app.use(
   })
 );
 
-// Single-page site: "/" is the only real route, so it's the only path that
-// should return the app shell.
+// Single-page site: "/" is the only route that returns the interactive app
+// shell. The legal pages are deliberately plain static HTML, not part of the
+// React bundle — nobody needs the 3D scene to read a privacy policy, and it
+// keeps them reachable at clean URLs without pulling in a router.
 app.get("/", (_req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
+});
+
+app.get("/privacy-policy", (_req, res) => {
+  res.sendFile(path.join(distPath, "privacy-policy.html"));
+});
+
+app.get("/terms-of-use", (_req, res) => {
+  res.sendFile(path.join(distPath, "terms-of-use.html"));
 });
 
 // Anything else is genuinely not found — a real 404 status with a branded

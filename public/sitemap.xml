@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Single-page site: all content lives on / as in-page sections, so there is one
-  URL. Section anchors are deliberately NOT listed as separate <url> entries —
-  search engines treat them as the same document and listing them adds noise.
+  Mostly a single-page site: the homepage's in-page sections are deliberately
+  NOT listed as separate <url> entries — search engines treat anchors as the
+  same document and listing them adds noise. Privacy Policy and Terms of Use
+  ARE real, separate static pages (public/privacy-policy.html,
+  public/terms-of-use.html), so they're genuinely distinct URLs worth listing.
   Update the domain here if you deploy somewhere other than nexyronix.com.
 -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -10,5 +12,15 @@
     <loc>https://nexyronix.com/</loc>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://nexyronix.com/privacy-policy</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://nexyronix.com/terms-of-use</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
   </url>
 </urlset>

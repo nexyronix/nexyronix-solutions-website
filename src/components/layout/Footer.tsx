@@ -21,22 +21,15 @@ const LINK_GROUPS: { title: string; links: { label: string; href: string }[] }[]
       { label: "Apply", href: "#internship-apply" },
     ],
   },
-  // LEGAL COLUMN — INTENTIONALLY OMITTED FOR NOW.
-  //
-  // Privacy Policy and Terms & Conditions pages do not exist yet. This is a
-  // single-page app with an SPA fallback, so linking to /privacy would have
-  // silently served the homepage instead of 404-ing — a worse failure than no
-  // link at all.
-  //
-  // These pages are NOT optional before launch: the contact form collects
-  // personal data (name, email, phone), which triggers disclosure obligations
-  // under India's DPDP Act and most other regimes. The legal text needs to come
-  // from you or a lawyer — it isn't something to generate.
-  //
-  // To restore once the pages exist, add back:
-  //   { title: "Legal", links: [
-  //       { label: "Privacy Policy", href: "/privacy" },
-  //       { label: "Terms & Conditions", href: "/terms" } ] }
+  {
+    // Plain static pages (public/privacy-policy.html, public/terms-of-use.html),
+    // served at clean URLs by server/index.ts — not part of the SPA/router.
+    title: "Legal",
+    links: [
+      { label: "Privacy Policy", href: "/privacy-policy" },
+      { label: "Terms of Use", href: "/terms-of-use" },
+    ],
+  },
 ];
 
 export function Footer() {
