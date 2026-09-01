@@ -30,7 +30,10 @@ export function ProcessTimeline({ stages, activeIndex, onHover }: ProcessTimelin
             onBlur={() => onHover(null)}
             aria-pressed={isActive}
             aria-label={`${stage.name} — ${stage.statement}`}
-            className="relative z-10 flex flex-1 flex-col items-center gap-2 px-1 text-center"
+            className={cn(
+              "relative z-10 flex flex-1 flex-col items-center gap-2 rounded-lg px-1 py-2 text-center transition-colors duration-300",
+              isActive && "bg-surface"
+            )}
           >
             <span
               className={cn(

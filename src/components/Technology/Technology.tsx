@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Container } from "@/components/ui/Container";
+import { FilterPill } from "@/components/ui/FilterPill";
 import { TechnologyConstellation } from "./TechnologyConstellation";
 import { TechnologyCategoryFilter } from "./TechnologyCategoryFilter";
 import { TechnologyGrid } from "./TechnologyGrid";
@@ -59,21 +60,15 @@ export function Technology() {
           <p className="label-eyebrow mb-3">Selected Technologies</p>
           <div className="flex flex-wrap gap-2">
             {FEATURED_TECHNOLOGIES.map((tech) => (
-              <button
+              <FilterPill
                 key={tech.id}
-                type="button"
+                variant="chip"
+                active={selectedId === tech.id}
                 onClick={() => handleSelect(tech.id)}
-                aria-pressed={selectedId === tech.id}
-                className={cn(
-                  "flex items-center gap-2 rounded-pill border px-3 py-1.5 text-xs transition-colors duration-200",
-                  selectedId === tech.id
-                    ? "border-accent-cyan/60 bg-surface text-text"
-                    : "border-border text-text-muted hover:border-border-strong hover:text-text"
-                )}
               >
                 <TechIconGlyph icon={tech.icon} size={14} />
                 {tech.name}
-              </button>
+              </FilterPill>
             ))}
           </div>
         </div>

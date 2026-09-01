@@ -13,7 +13,7 @@ export function HeroContent() {
       </div>
 
       <h1
-        className="mt-6 animate-fade-up font-display text-display-xl font-semibold uppercase leading-[1.02] text-text opacity-0"
+        className="mt-6 animate-fade-up font-display text-display-xl font-semibold uppercase tracking-tight leading-[1.02] text-text opacity-0"
         style={{ animationDelay: "90ms" }}
       >
         Building the digital <span className="text-accent-primary">future.</span>
@@ -40,7 +40,7 @@ export function HeroContent() {
       </div>
 
       <p
-        className="mt-10 animate-fade-up font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint opacity-0"
+        className="mt-10 animate-fade-up font-mono text-xs uppercase tracking-[0.2em] text-text-faint opacity-0"
         style={{ animationDelay: "360ms" }}
       >
         {TECH_TAGS.join(" • ")}

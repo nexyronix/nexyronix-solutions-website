@@ -77,9 +77,9 @@ export function ContactOptions({ activeId, onSelect, revealed }: ContactOptionsP
               aria-hidden="true"
             />
 
-            <h4 className="font-display text-base font-semibold uppercase text-text">
+            <h3 className="font-display text-base font-semibold uppercase text-text">
               {option.title}
-            </h4>
+            </h3>
             <p className="mt-2.5 flex-1 text-sm leading-relaxed text-text-muted">
               {option.description}
             </p>

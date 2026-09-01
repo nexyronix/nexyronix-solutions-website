@@ -94,7 +94,7 @@ export function IndustryVisual({ industries, selectedId, onSelect }: IndustryVis
             role="button"
             aria-label={ind.name}
           >
-            <circle cx={x} cy={y} r="14" fill="transparent" />
+            <circle cx={x} cy={y} r="22" fill="transparent" />
             {isActive && (
               <circle cx={x} cy={y} r="9" fill="none" stroke={CYAN} strokeOpacity="0.5" className="animate-pulse-slow" />
             )}

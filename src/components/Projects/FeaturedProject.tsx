@@ -54,7 +54,7 @@ export function FeaturedProject({ project, revealed }: FeaturedProjectProps) {
 
         <a
           href="#contact"
-          className="group/btn mt-8 inline-flex w-fit items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-accent-cyan transition-colors duration-200 hover:text-text"
+          className="group/btn mt-8 inline-flex w-fit items-center gap-2 font-mono text-xs uppercase tracking-[0.14em] text-accent-cyan transition-colors duration-200 hover:text-text"
         >
           Discuss a project like this
           <ArrowIcon />

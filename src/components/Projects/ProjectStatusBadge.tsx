@@ -19,7 +19,7 @@ export function ProjectStatusBadge({ status, size = "sm", className }: ProjectSt
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-pill border font-mono uppercase tracking-[0.14em] backdrop-blur-sm",
-        size === "sm" ? "px-2.5 py-1 text-[9px]" : "px-3 py-1.5 text-[10px]",
+        size === "sm" ? "px-2.5 py-1 text-[10px]" : "px-3 py-1.5 text-xs",
         isConcept
           ? "border-accent-violet/40 bg-accent-violet/10 text-accent-violet"
           : "border-accent-cyan/40 bg-accent-cyan/10 text-accent-cyan",

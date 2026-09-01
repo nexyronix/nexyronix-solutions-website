@@ -57,7 +57,7 @@ export function Solutions() {
           className={cn("mt-16 flex flex-col items-center gap-4 text-center", REVEAL, revealed)}
           style={{ transitionDelay: "820ms" }}
         >
-          <p className="font-display text-sm font-medium uppercase tracking-[0.14em] text-text-muted">
+          <p className="font-display text-sm font-medium tracking-[0.02em] text-text-muted">
             One idea. Many ways to build it.
           </p>
           <svg width="16" height="24" viewBox="0 0 16 24" fill="none" className="text-text-faint" aria-hidden="true">

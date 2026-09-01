@@ -8,15 +8,24 @@ import { cn } from "@/lib/cn";
 
 const REVEAL = "transition-all duration-700 ease-signature";
 
+// Progressive disclosure rather than dumping every domain in one grid — the
+// technology group alone runs to 14 cards, which is a lot to scroll past
+// before reaching the rest of the page. Same cards, same grid, just fewer
+// shown until asked for.
+const INITIAL_VISIBLE = 8;
+
 export function InternshipDomains() {
   const { ref, inView } = useInViewOnce<HTMLDivElement>();
   const revealed = inView ? "translate-y-0 opacity-100" : "translate-y-6 opacity-0";
 
   const [group, setGroup] = useState<DomainGroup>("technology");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
-  const domains = INTERNSHIP_DOMAINS.filter((d) => d.group === group);
-  const openDomain = domains.find((d) => d.id === openId) ?? null;
+  const allDomains = INTERNSHIP_DOMAINS.filter((d) => d.group === group);
+  const domains = showAll ? allDomains : allDomains.slice(0, INITIAL_VISIBLE);
+  const hiddenCount = allDomains.length - domains.length;
+  const openDomain = allDomains.find((d) => d.id === openId) ?? null;
 
   function handleToggle(id: string) {
     setOpenId((current) => (current === id ? null : id));
@@ -25,6 +34,7 @@ export function InternshipDomains() {
   function handleGroupChange(next: DomainGroup) {
     setGroup(next);
     setOpenId(null); // avoid leaving a detail panel open for a now-hidden card
+    setShowAll(false);
   }
 
   return (
@@ -82,6 +92,18 @@ export function InternshipDomains() {
             />
           ))}
         </div>
+
+        {hiddenCount > 0 && (
+          <div className="mt-6 flex justify-center">
+            <button
+              type="button"
+              onClick={() => setShowAll(true)}
+              className="rounded-pill border border-border px-5 py-2.5 font-mono text-xs uppercase tracking-[0.12em] text-text-muted transition-colors duration-200 hover:border-border-strong hover:text-text"
+            >
+              Show all {allDomains.length} domains
+            </button>
+          </div>
+        )}
 
         {/* Detail — rendered once, below the grid, so it never reflows the card layout */}
         {openDomain && (

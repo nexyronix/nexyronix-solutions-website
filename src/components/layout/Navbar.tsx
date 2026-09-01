@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Container } from "@/components/ui/Container";
 import { Logo } from "@/components/ui/Logo";
 import { Button } from "@/components/ui/Button";
+import { ArrowIcon } from "@/components/ui/ArrowIcon";
 import { cn } from "@/lib/cn";
 
 const NAV_LINKS = [
@@ -63,7 +64,7 @@ export function Navbar() {
           </ul>
 
           <div className="hidden lg:block">
-            <Button href="#contact" size="md">
+            <Button href="#contact" size="md" icon={<ArrowIcon />}>
               Start a Project
             </Button>
           </div>
@@ -115,7 +116,13 @@ export function Navbar() {
                 {link.label}
               </a>
             ))}
-            <Button href="#contact" size="md" className="mt-3 w-full" onClick={() => setMenuOpen(false)}>
+            <Button
+              href="#contact"
+              size="md"
+              className="mt-3 w-full"
+              icon={<ArrowIcon />}
+              onClick={() => setMenuOpen(false)}
+            >
               Start a Project
             </Button>
           </Container>

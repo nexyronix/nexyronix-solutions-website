@@ -1,5 +1,6 @@
 import { Suspense, lazy, useState } from "react";
 import { Container } from "@/components/ui/Container";
+import { FilterPill } from "@/components/ui/FilterPill";
 import { UniverseFallback } from "./UniverseFallback";
 import { getTechNodes } from "./technologyNodesData";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
@@ -46,7 +47,7 @@ export function TechnologyUniverse() {
             <p className={cn("label-eyebrow", REVEAL, revealed)}>The Nexyronix Ecosystem</p>
             <h2
               className={cn(
-                "mt-4 font-display text-display-md font-semibold uppercase text-text",
+                "mt-4 font-display text-display-md font-semibold uppercase tracking-tight text-text",
                 REVEAL,
                 revealed
               )}
@@ -66,24 +67,17 @@ export function TechnologyUniverse() {
               <p className="label-eyebrow mb-3">Explore the Ecosystem</p>
               <div className="flex flex-wrap gap-2" role="group" aria-label="Technology nodes">
                 {ALL_NODES.map((node) => (
-                  <button
+                  <FilterPill
                     key={node.id}
-                    type="button"
+                    active={displayId === node.id}
                     onMouseEnter={() => setHoveredId(node.id)}
                     onMouseLeave={() => setHoveredId(null)}
                     onFocus={() => setHoveredId(node.id)}
                     onBlur={() => setHoveredId(null)}
                     onClick={() => toggleSelected(node.id)}
-                    aria-pressed={selectedId === node.id}
-                    className={cn(
-                      "rounded-pill border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors duration-200",
-                      displayId === node.id
-                        ? "border-accent-cyan/60 bg-surface text-text"
-                        : "border-border text-text-muted hover:border-border-strong hover:text-text"
-                    )}
                   >
                     {node.label}
-                  </button>
+                  </FilterPill>
                 ))}
               </div>
 

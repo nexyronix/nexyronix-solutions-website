@@ -61,7 +61,7 @@ export function TechnologyCard({
         <span className="label-eyebrow shrink-0 pt-1">{categoryLabel(technology.category)}</span>
       </div>
 
-      <h4 className="mt-4 font-display text-base font-semibold text-text">{technology.name}</h4>
+      <h3 className="mt-4 font-display text-base font-semibold text-text">{technology.name}</h3>
       <p className="mt-2 text-sm leading-relaxed text-text-muted">{technology.description}</p>
     </button>
   );

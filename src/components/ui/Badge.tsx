@@ -13,7 +13,7 @@ export function Badge({ children, dot = false, className }: BadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-2 rounded-pill border border-border bg-surface/60 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-text-muted backdrop-blur-sm",
+        "inline-flex items-center gap-2 rounded-pill border border-border bg-surface/60 px-3 py-1.5 font-mono text-xs uppercase tracking-[0.14em] text-text-muted backdrop-blur-sm",
         className
       )}
     >

@@ -64,7 +64,7 @@ export function Process() {
           className={cn("mt-20 flex flex-col items-center gap-5 text-center", REVEAL, revealed)}
           style={{ transitionDelay: "320ms" }}
         >
-          <h3 className="font-display text-display-sm font-semibold uppercase text-text sm:text-display-md">
+          <h3 className="font-display text-display-sm font-semibold uppercase tracking-tight text-text sm:text-display-md">
             Ready to Build Something?
           </h3>
           <p className="max-w-md text-base text-text-muted">

@@ -35,7 +35,7 @@ export function CaseStudyPreview({ caseStudy, revealed }: CaseStudyPreviewProps)
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="label-eyebrow">Case Study Structure</p>
         {!hasData && (
-          <span className="rounded-pill border border-border bg-bg/50 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-text-faint">
+          <span className="rounded-pill border border-border bg-bg/50 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-text-faint">
             Awaiting real project data
           </span>
         )}

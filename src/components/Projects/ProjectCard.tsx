@@ -58,7 +58,7 @@ export function ProjectCard({
 
         <h4
           className={cn(
-            "mt-3 font-display font-semibold uppercase text-text",
+            "mt-3 font-display font-semibold text-text",
             isHorizontal ? "text-lg sm:text-xl" : "text-base"
           )}
         >

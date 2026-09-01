@@ -25,7 +25,7 @@ export function Logo({ context = "nav", className }: LogoProps) {
       <span
         className={cn(
           "font-mono text-text-faint uppercase",
-          context === "nav" ? "text-[9px] tracking-[0.22em] mt-1" : "text-[11px] tracking-[0.28em] mt-2"
+          context === "nav" ? "text-[10px] tracking-[0.18em] mt-1" : "text-xs tracking-[0.24em] mt-2"
         )}
       >
         Solutions Private Limited
