@@ -6,6 +6,8 @@ that hosts both the static build and the enquiry API.
 
 ## Quick start
 
+Requires **Node.js 24** (see `.nvmrc`).
+
 ```bash
 npm install
 cp .env.example .env      # fill in RESEND_API_KEY / CONTACT_EMAIL / SMTP_FROM
@@ -15,48 +17,103 @@ npm run dev               # frontend only (no /api)
 Production:
 
 ```bash
-npm run build             # vite build -> dist/
-npm start                 # express server on $PORT, serves dist/ + /api
+npm run build             # typecheck, vite build -> dist/, bundle server -> dist-server/
+npm start                 # node dist-server/index.js on $PORT, serves dist/ + /api
 ```
 
-`npm run typecheck` runs the compiler over the app, the API and the server.
+`npm run dev:server` runs the unbundled server through `tsx` (after a
+`vite build`), which is handy when changing `server/` or `api/`.
 
 ## Deployment
 
-**Railway (configured):** `railway.json` sets build `npm ci && npm run build`,
-start `npm start`, healthcheck `/api/health`. The server reads `PORT` from the
-environment and binds `0.0.0.0`. Set the environment variables below in the
-Railway dashboard — never in the repo.
+The production server is one Node process: Express serves the static build and
+the enquiry API on the same origin. `npm run build` bundles `server/index.ts`
+together with `api/` and `src/shared/` into `dist-server/index.js`, so a host
+needs only these at runtime:
 
-**Vercel (also supported):** `api/contact.ts` works as a serverless function
-directly, and `vercel.json` carries the same security headers the Express server
-sets. Both paths import the *same* handler, so there is one implementation.
+```
+dist/                 static frontend (Vite)
+dist-server/          bundled server (+ source map)
+package.json, package-lock.json
+node_modules/         production deps only: express, compression (npm ci --omit=dev)
+```
 
-## Required environment variables
+The server reads `PORT`, binds `0.0.0.0`, answers `GET /api/health` with 200,
+and shuts down gracefully on `SIGTERM` (in-flight requests finish, 15 s cap).
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `CONTACT_EMAIL` | yes | Where enquiries are delivered |
-| `RESEND_API_KEY` | yes | [Resend](https://resend.com) API key. Sent via HTTPS, not SMTP — Railway blocks outbound SMTP ports below its Pro plan; see the note in `api/contact.ts` |
-| `SMTP_FROM` | yes | From address; must be on a domain Resend has verified. Name kept from the earlier SMTP-based version |
-| `DATABASE_URL` | no | Enables the optional enquiry storage hook |
-| `VITE_SITE_URL` | no | Canonical origin; defaults to `https://nexyronix.com` |
-| `VITE_CONTACT_EMAIL` | no | Public contact email (rendered only if set) |
-| `VITE_CONTACT_PHONE` | no | Public phone (rendered only if set) |
-| `VITE_CONTACT_LOCATION` | no | Public location (rendered only if set) |
-| `PORT` | no | Injected by Railway |
+### Azure App Service (Linux) — prepared, not yet live
 
-Only `VITE_`-prefixed values reach the browser. `RESEND_API_KEY` and
-`DATABASE_URL` deliberately have no prefix, so Vite cannot bundle them.
+`.github/workflows/azure-app-service.yml` builds and smoke-tests the deployment
+package on every push and pull request. It **deploys only once the
+`AZURE_WEBAPP_NAME` repository variable exists**, authenticating with OIDC — no
+publish profile or client secret is stored.
+
+One-time setup:
+
+1. **Web app**: Linux, runtime `NODE|24-lts`. Settings: HTTPS Only on, minimum
+   TLS 1.2, Always On, ARR affinity **off**, FTP/FTPS and SCM basic-auth
+   publishing **off**, Health check path `/api/health`.
+2. **App Settings**: `CONTACT_EMAIL`, `SMTP_FROM`, `RESEND_API_KEY` (as a Key
+   Vault reference via the app's managed identity), `NODE_ENV=production`,
+   `SCM_DO_BUILD_DURING_DEPLOYMENT=false`. Set `CANONICAL_HOST=nexyronix.com`
+   only **after** the custom domain is bound. Don't set `PORT`.
+3. **Startup command**: `node --enable-source-maps dist-server/index.js` (the
+   workflow sets it on each deploy). Run node directly rather than `npm start`
+   so SIGTERM reaches the server.
+4. **OIDC**: an Entra app registration or user-assigned managed identity with
+   a federated credential for
+   `repo:nexyronix/nexyronix-solutions-website:environment:production`,
+   granted *Website Contributor* on the web app only. Then add repository
+   secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, a
+   `production` environment, and finally the `AZURE_WEBAPP_NAME` variable
+   (optionally `AZURE_WEBAPP_SLOT`).
+
+The workflow also runs on the `azure-migration` branch so Azure can be
+validated before anything reaches `main`. Remove that branch from the trigger
+after cutover.
+
+### Railway — current production until cutover
+
+`railway.json`: build `npm run build`, start `npm start`, healthcheck
+`/api/health`. `railway.json` and `vercel.json` are scheduled for removal after
+a successful Azure migration.
+
+**Before merging to `main`:** Railway redeploys from `main`. Check that its
+builder honours `"engines": { "node": "24.x" }` (or set its Node version
+explicitly), and that Railway's proxy appends exactly one `X-Forwarded-For`
+hop (otherwise set `TRUST_PROXY_HOPS`), or merge only at cutover.
+
+**Vercel (legacy):** `api/contact.ts` still works as a serverless function and
+`vercel.json` carries the enforced security headers, but the Express server is
+the maintained path.
+
+## Environment variables
+
+| Variable | When | Required | Purpose |
+|---|---|---|---|
+| `CONTACT_EMAIL` | runtime | yes | Where enquiries are delivered |
+| `RESEND_API_KEY` | runtime | yes | **Secret.** [Resend](https://resend.com) API key, used over HTTPS (not SMTP), so outbound SMTP-port restrictions don't matter |
+| `SMTP_FROM` | runtime | yes | From address on a domain verified in Resend. Name kept from the earlier SMTP-based version |
+| `CANONICAL_HOST` | runtime | no | e.g. `nexyronix.com`; all other hostnames 301/308-redirect to it (`/api/health` exempt). Leave unset until the domain points at this deployment |
+| `TRUST_PROXY_HOPS` | runtime | no | Proxies appending to `X-Forwarded-For` (default `1`; `2` with Front Door in front of App Service). Determines the client IP used for rate limiting |
+| `NODE_ENV` | runtime | recommended | `production` on the host. Not where the build runs — it would skip devDependencies |
+| `PORT` | runtime | no | Injected by the platform |
+| `VITE_CONTACT_EMAIL` / `_PHONE` / `_LOCATION` | build | no | Override the public contact details defaulted in `src/data/site.ts` |
+| `VITE_SITE_URL` | build | no | Declared but **currently unused** — canonical/OG/sitemap URLs are hard-coded |
+| `DATABASE_URL` | — | no | **Not implemented**; `storeEnquiry()` is a no-op. Leave unset |
+
+Only `VITE_`-prefixed values reach the browser, and they are fixed at build
+time — set them where `npm run build` runs, not on the host. `RESEND_API_KEY`
+deliberately has no prefix, so Vite cannot bundle it.
 
 ## Build & type checking
 
 ```bash
 npm run typecheck   # app + server + vite config, three separate tsconfigs
-npm run build       # runs typecheck, then vite build
+npm run build       # typecheck, then vite build, then esbuild bundles the server
 ```
 
-`build` deliberately type-checks first — Vite/esbuild strips types without
+`build` deliberately type-checks first — Vite/esbuild strip types without
 checking them, so without this step type errors would ship silently.
 
 Three tsconfigs, deliberately separate because they target different runtimes:
@@ -70,20 +127,20 @@ Three tsconfigs, deliberately separate because they target different runtimes:
 `src/shared/enquiry.ts` is intentionally in both the app and server projects —
 it is isomorphic and must compile under both.
 
-## Before you launch — manual steps
+## Operational checklist
 
-1. **Set `RESEND_API_KEY`, `CONTACT_EMAIL` and `SMTP_FROM`, and verify your
-   sending domain with Resend.** Until then the form validates and then fails
-   with a friendly error. It is wired to a real endpoint, not faked.
-2. **Add Privacy Policy and Terms pages.** The footer's Legal column is
-   commented out because those pages don't exist. The contact form collects
-   personal data, so these are a legal requirement, and the text needs to come
-   from you or a lawyer.
-3. **Add `public/og-image.png`** (1200×630). The meta tags reference it.
-4. **Update the domain** in `index.html` (4 URLs), `public/sitemap.xml` and
-   `public/robots.txt` if you deploy anywhere other than `nexyronix.com`.
-5. **Swap the rate limiter for Redis** if you run more than one instance — it is
-   in-memory today (see `api/contact.ts`).
+1. **Set `RESEND_API_KEY`, `CONTACT_EMAIL` and `SMTP_FROM`, and keep the
+   sending domain verified in Resend.** Without them the form validates and
+   then fails with a friendly error; the server also logs which are missing at
+   startup (names only, never values).
+2. **Domain changes**: the canonical/Open Graph URLs in `index.html`,
+   `public/sitemap.xml`, `public/robots.txt` and the legal pages are
+   hard-coded to `https://nexyronix.com`.
+3. **DNS moves**: keep Resend's DKIM/SPF records and the mailbox MX records
+   intact when repointing the site.
+4. **Scaling out**: the rate limiter is in-memory, so each instance counts
+   separately. Fine for one instance; use a shared store for several (see
+   `api/contact.ts`).
 
 ## What's in this phase
 
@@ -111,40 +168,54 @@ sent — client-side validation is purely for fast feedback and is never trusted
 - Server-side revalidation of every field; unknown fields are dropped via an explicit whitelist
 - HTML-escaping of all values before they enter the notification email (XSS)
 - Email-header sanitization (CRLF stripping) to prevent header injection
-- Per-IP rate limiting (5 submissions / 10 minutes)
-- Request body size cap (16 KB) checked before any processing
+- Per-IP rate limiting (5 submissions / 10 minutes), keyed on the address the trusted proxy
+  appended to `X-Forwarded-For` — never the client-written leftmost entry — with ports stripped,
+  IPv4-mapped IPv6 unwrapped, and IPv6 bucketed per /64
+- Request body cap of 8 MB (sized for a base64-encoded 5 MB resume); oversized bodies get a 413
+- Resume uploads: PDF/DOC/DOCX only, ≤ 5 MB, verified by file signature, renamed server-side,
+  attached to the email and never stored
 - Honeypot field; bots that fill it get a 200 with no delivery, so they learn nothing
 - Generic client-facing errors — transport and credential failures are logged server-side only
+
+**Server behaviour** (`server/index.ts`): security headers on every response (CSP, HSTS,
+X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy) plus a stricter
+`Content-Security-Policy-Report-Only` candidate that drops `'unsafe-inline'`/`'unsafe-eval'` from
+`script-src` — it only logs browser console warnings and blocks nothing. Hashed files in
+`dist/assets/` are cached for a year, other static files for an hour, HTML always revalidates.
+Unknown pages get the branded 404 with a real 404 status; unknown `/api/*` routes get JSON 404s;
+`/api/contact` answers non-POST methods with 405.
 
 **Rate limiting is in-memory**, which suits a single instance and fails safe on cold start. For
 multi-instance deployments, swap the `Map` in `api/contact.ts` for Redis or your platform's KV
 store; the interface is deliberately tiny.
 
-**Optional storage.** `storeEnquiry()` is a documented no-op unless `DATABASE_URL` is set. It's
-left unwired on purpose — guessing at a database you may not use would be worse than an explicit
-hook. The intended table shape is documented in the function's comment. A storage failure never
-fails the request, since the email has already gone out.
+**Optional storage — not implemented.** `storeEnquiry()` is a documented no-op hook: it returns
+early when `DATABASE_URL` is unset and does nothing when it is set. There is no database driver
+and no database is needed. It's left unwired on purpose — guessing at a database you may not use
+would be worse than an explicit hook. The intended table shape is documented in the function's
+comment; if it's ever wired up, update the Privacy Policy, which states that submissions and
+resumes are not stored by the website.
 
 **Adapting to another host.** The handler uses a minimal request/response shape, so moving it to
 Netlify Functions, Lambda, or an Express route (`app.post('/api/contact', ...)`) is a signature
 change, not a rewrite.
 
-## Note on contact details in Phase 11
+## Note on contact details
 
-No address, phone number, email or office hours have been provided for Nexyronix, so **none are
-invented**. `ContactInfo.tsx` reads `VITE_CONTACT_EMAIL`, `VITE_CONTACT_PHONE` and
-`VITE_CONTACT_LOCATION`; any that are blank simply don't render, and if all are blank the block
-shows a short "will appear here once configured" note. There is no fake placeholder that could
-reach production by accident.
+`src/data/site.ts` ships Nexyronix's real, provided contact details (email, phone, Bengaluru office
+address) as defaults. `VITE_CONTACT_EMAIL`, `VITE_CONTACT_PHONE` and `VITE_CONTACT_LOCATION` can
+override them per build. Nothing else — office hours, social profiles — is invented;
+`SOCIAL_LINKS` stays empty until real accounts exist.
 
 Note the `VITE_` prefix: those three are *public* by design and shipped to the browser. The
-`RESEND_API_KEY` and `DATABASE_URL` deliberately have no prefix, so Vite will never bundle them.
+`RESEND_API_KEY` deliberately has no prefix, so Vite will never bundle it.
 
 ## Note on the internship path
 
 The Internship option preselects the "Internship" enquiry type in the shared form rather than
-opening a separate application flow. Resume upload and a dedicated internship route were out of
-scope for this phase; the `#internships` section anchor from Phase 7 remains the entry point.
+opening a separate application flow. Internship and Career Opportunity enquiries can attach an
+optional resume (see Backend notes); there is still no dedicated internship route — the
+`#internships` section anchor remains the entry point.
 
 ## Note on factual accuracy in Phase 10 — read before editing
 
@@ -299,12 +370,8 @@ Everything downstream (Tailwind utilities, components) inherits from there.
   `role="status"` with `aria-live="polite"`. Full keyboard operation with visible focus rings.
 - All motion respects `prefers-reduced-motion` via the global rule in `src/index.css`.
 
-## Prepared, not yet wired
+## Animation dependencies
 
-`framer-motion` is still declared in `package.json` but unused — every animation so far
-is CSS-level (Tailwind keyframes and transitions) or driven by `useFrame` inside the 3D
-scenes. Reserved for more choreographed motion later.
-
-## Next phase (not built yet)
-
-Phase 12 — footer redesign and the final SEO/performance audit.
+There is no animation library: `framer-motion` was removed in Phase 12 because it was never
+imported. Every animation is CSS-level (Tailwind keyframes and transitions) or driven by
+`useFrame` inside the 3D scenes.
