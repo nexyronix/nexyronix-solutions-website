@@ -61,7 +61,15 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
+      # VITE_* values are baked into the browser bundle at build time, so they
+      # must be provided here, not as App Settings. All optional: when a
+      # repository variable is unset the value is empty and src/data/site.ts
+      # falls back to the real defaults. Mirror any overrides Railway has.
       - name: Typecheck and build (frontend + server bundle)
+        env:
+          VITE_CONTACT_EMAIL: ${{ vars.VITE_CONTACT_EMAIL }}
+          VITE_CONTACT_PHONE: ${{ vars.VITE_CONTACT_PHONE }}
+          VITE_CONTACT_LOCATION: ${{ vars.VITE_CONTACT_LOCATION }}
         run: npm run build
 
       # Exactly what runs on App Service: the static build, the bundled server,
