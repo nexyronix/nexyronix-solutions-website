@@ -15,16 +15,17 @@
  *
  * EMAIL DELIVERY
  * Sends via the Resend HTTPS API (fetch, no SDK dependency), not SMTP.
- * Railway blocks outbound SMTP (ports 25/465/587/2525) on every plan below
- * Pro — confirmed by testing against two different providers (a mailbox and
- * a transactional-email service) from this exact deployment, both failing
- * identically with an ETIMEDOUT at the TCP-connect stage. An HTTPS API call
- * isn't affected, since only the SMTP-specific ports are blocked. If you're
- * on Railway Pro (or a host that doesn't block SMTP) and want to go back to
- * generic SMTP for provider flexibility, swap deliverEnquiry() back to a
+ * Originally chosen because Railway blocks outbound SMTP (ports
+ * 25/465/587/2525) below its Pro plan — confirmed by testing two providers
+ * from that deployment, both failing with ETIMEDOUT at TCP connect. It is
+ * kept on every host: an HTTPS call on port 443 isn't subject to the
+ * SMTP-port restrictions cloud platforms commonly apply, so delivery works
+ * the same on Azure App Service, Railway or anywhere else. To go back to
+ * generic SMTP on a host that permits it, swap deliverEnquiry() for a
  * nodemailer transport — nothing else in this file needs to change.
  */
 
+import { isIP } from "node:net";
 import {
   validateEnquiry,
   hasErrors,
@@ -43,6 +44,12 @@ export interface ApiRequest {
   body?: unknown;
   headers: Record<string, string | string[] | undefined>;
   socket?: { remoteAddress?: string };
+  /**
+   * Client address as resolved by the host framework. Express sets this from
+   * X-Forwarded-For according to its `trust proxy` setting (see
+   * server/index.ts), which is the only place the trusted-hop count is known.
+   */
+  ip?: string;
 }
 
 export interface ApiResponse {
@@ -90,10 +97,82 @@ function isRateLimited(ip: string): boolean {
   return false;
 }
 
+/**
+ * Identifies the client for rate limiting.
+ *
+ * Never trusts the LEFTMOST X-Forwarded-For entry: the client writes that one,
+ * so reading it let anyone bypass the limit by sending a fresh fake value per
+ * request. Proxies APPEND to the header, so only entries added by our own
+ * infrastructure (the rightmost ones) are trustworthy.
+ *
+ * - Under Express (server/index.ts), `req.ip` is already resolved from the
+ *   header using the configured trusted-hop count — that's authoritative.
+ * - Without a framework (serverless), fall back to the rightmost entry, which
+ *   is the one the platform's own edge appended.
+ */
 function clientIp(req: ApiRequest): string {
+  if (req.ip) return rateLimitKey(req.ip);
+
   const forwarded = req.headers["x-forwarded-for"];
-  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  return raw?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown";
+  const joined = Array.isArray(forwarded) ? forwarded.join(",") : forwarded;
+  const rightmost = joined
+    ?.split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .pop();
+
+  return rateLimitKey(rightmost || req.socket?.remoteAddress || "");
+}
+
+/**
+ * Normalises an address into a stable rate-limit key:
+ * - strips a port (Azure App Service's front end forwards "IP:port", and the
+ *   port changes with every connection, which would give each request a new
+ *   bucket),
+ * - unwraps IPv4-mapped IPv6 ("::ffff:203.0.113.5" -> "203.0.113.5"),
+ * - buckets IPv6 by /64, since a single subscriber is normally handed a whole
+ *   /64 and can rotate through it freely.
+ * Anything unparseable shares one "unknown" bucket — failing closed, not open.
+ */
+function rateLimitKey(raw: string): string {
+  let ip = raw.trim();
+
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(ip); // "[2001:db8::1]:443"
+  if (bracketed) {
+    ip = bracketed[1];
+  } else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) {
+    ip = ip.slice(0, ip.lastIndexOf(":")); // "203.0.113.5:51234"
+  }
+
+  const zone = ip.indexOf("%"); // "fe80::1%eth0"
+  if (zone !== -1) ip = ip.slice(0, zone);
+  ip = ip.toLowerCase();
+
+  if (ip.startsWith("::ffff:") && isIP(ip.slice(7)) === 4) ip = ip.slice(7);
+
+  const version = isIP(ip);
+  if (version === 4) return ip;
+  if (version === 6) return `${ipv6Prefix64(ip)}::/64`;
+  return "unknown";
+}
+
+/** First four hextets of a valid IPv6 address, e.g. "2001:db8:aa:bb". */
+function ipv6Prefix64(ip: string): string {
+  const [head, tail] = ip.includes("::") ? ip.split("::") : [ip, undefined];
+  // An embedded dotted IPv4 tail occupies two hextets; its value is irrelevant
+  // here because only the first 64 bits are kept.
+  const expand = (part: string | undefined) =>
+    part ? part.split(":").flatMap((g) => (g.includes(".") ? ["0", "0"] : [g])) : [];
+  const headGroups = expand(head);
+  const tailGroups = expand(tail);
+  const groups =
+    tail === undefined
+      ? headGroups
+      : [...headGroups, ...Array(8 - headGroups.length - tailGroups.length).fill("0"), ...tailGroups];
+  return groups
+    .slice(0, 4)
+    .map((g) => parseInt(g, 16).toString(16))
+    .join(":");
 }
 
 // ---------------------------------------------------------------------------
