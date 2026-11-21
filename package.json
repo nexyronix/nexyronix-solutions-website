@@ -8,9 +8,10 @@
     "dev:server": "tsx server/index.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && tsc -p tsconfig.node.json",
     "build": "npm run typecheck && vite build && npm run build:server",
-    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node24 --format=esm --packages=external --sourcemap --outfile=dist-server/index.js",
+    "build:server": "node scripts/build-server.mjs",
     "preview": "vite preview",
-    "start": "node --enable-source-maps dist-server/index.js"
+    "start": "node --enable-source-maps dist-server/index.js",
+    "test": "node --import tsx --test \"test/**/*.test.ts\""
   },
   "dependencies": {
     "compression": "^1.8.2",
@@ -38,9 +39,10 @@
     "vite": "^6.4.6"
   },
   "notes": {
-    "three-stack": "three / @react-three/fiber / @react-three/drei power the Phase 2 hero and Phase 4 technology universe. Lazy-loaded — only fetched when WebGL is available and reduced-motion is off.",
+    "three-stack": "three / @react-three/fiber / @react-three/drei power the Phase 2 hero and Phase 4 technology universe. Lazy-loaded — only fetched when WebGL is available and reduced-motion is off. vite.config.ts keeps React in its own chunk so the three.js chunk is never on the initial page load; test/build-output.test.ts enforces that.",
     "framer-motion": "REMOVED in Phase 12. It was declared in Phase 1 but never imported — every animation is CSS-level (Tailwind keyframes) or useFrame inside the 3D scenes.",
-    "server": "server/index.ts serves dist/ and hosts /api/contact on one origin. `npm run build` bundles it (with api/ and src/shared/) into dist-server/index.js, so production runs plain Node with only express + compression installed. It imports the same handler as the serverless deployment, so contact logic exists once.",
+    "server": "server/index.ts serves dist/ and hosts /api/contact on one origin; the Express app itself is built by server/app.ts so tests can run it in-process. `npm run build` bundles both (with api/ and src/shared/) into dist-server/index.js via scripts/build-server.mjs, which also embeds the commit SHA reported by /api/health. Production runs plain Node with only express + compression installed. It imports the same handler as the serverless deployment, so contact logic exists once.",
+    "tests": "`npm test` runs node:test suites in test/ via tsx. The build-output checks need `npm run build` first; they are skipped locally without a build and mandatory in CI (CI=true).",
     "dependencies": "Only what the production server needs at runtime is in `dependencies`. React, three.js and the rest of the frontend are compiled into dist/ at build time, so they live in devDependencies — the build step installs them; the deployed app does not need them."
   },
   "engines": {

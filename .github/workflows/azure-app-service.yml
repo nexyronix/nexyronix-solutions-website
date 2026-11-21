@@ -18,6 +18,9 @@
 #   Federated credential subject:
 #                        repo:nexyronix/nexyronix-solutions-website:environment:production
 #
+# Each build embeds its commit SHA, which /api/health reports; the deploy job
+# only succeeds once Azure is serving that exact commit.
+#
 # The azure-migration branch is included so the Azure deployment can be
 # validated BEFORE anything is merged to main (which Railway deploys from).
 # Remove it from `on.push.branches` after cutover.
@@ -72,6 +75,13 @@ jobs:
           VITE_CONTACT_LOCATION: ${{ vars.VITE_CONTACT_LOCATION }}
         run: npm run build
 
+      # Unit, API and server tests, plus checks on the build output itself
+      # (www canonical URLs, three.js kept off the initial page load, embedded
+      # build id). GitHub sets CI=true, which makes the build-output checks
+      # mandatory instead of skippable.
+      - name: Run tests
+        run: npm test
+
       # Exactly what runs on App Service: the static build, the bundled server,
       # and production-only node_modules installed here on Linux (so any
       # platform-specific binaries match the host). No source, no dev tooling.
@@ -97,6 +107,10 @@ jobs:
           done
           status() { curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$1"; }
           test "$(status /api/health)" = "200"
+          # The package reports the commit it was built from.
+          health="$(curl -fs http://127.0.0.1:8080/api/health)"
+          echo "health: $health"
+          test "$(jq -r .version <<< "$health")" = "$GITHUB_SHA"
           test "$(status /)" = "200"
           test "$(status /privacy-policy)" = "200"
           test "$(status /terms-of-use)" = "200"
@@ -165,17 +179,23 @@ jobs:
           # graceful shutdown works on restarts, scale-in and slot swaps.
           startup-command: node --enable-source-maps dist-server/index.js
 
-      - name: Verify deployment health
+      # A plain 200 isn't proof: right after a deploy the PREVIOUS build can
+      # still be answering while the new one starts. Wait until the health
+      # check reports this run's commit.
+      - name: Verify the new build is serving
         env:
           WEBAPP_URL: ${{ steps.deploy.outputs.webapp-url }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
+          url="${WEBAPP_URL%/}/api/health"
           for i in $(seq 1 30); do
-            if curl -fsS "${WEBAPP_URL%/}/api/health"; then
-              echo
-              echo "Healthy: ${WEBAPP_URL%/}/api/health"
+            version="$(curl -fsS --max-time 10 "$url" | jq -r '.version // empty' || true)"
+            if [ "$version" = "$EXPECTED_SHA" ]; then
+              echo "Healthy and serving $version: $url"
               exit 0
             fi
+            echo "Attempt $i/30: serving '${version:-no healthy response}', waiting for $EXPECTED_SHA"
             sleep 10
           done
-          echo "::error::${WEBAPP_URL%/}/api/health did not return 200 within 5 minutes"
+          echo "::error::$url did not report build $EXPECTED_SHA within 5 minutes"
           exit 1
