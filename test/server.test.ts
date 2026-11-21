@@ -5,6 +5,9 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { CSP, CSP_REPORT_ONLY } from "../server/app";
 import { freshIp, postEnquiry, request, startApp, TEST_BUILD_SHA, type RunningApp } from "./helpers";
 
@@ -183,6 +186,107 @@ describe("unexpected handler errors (M2)", () => {
       console.error = originalError;
       await failing.close();
     }
+  });
+
+  it("are logged with email addresses redacted", async () => {
+    const failing = await startApp({
+      contactHandler: async () => {
+        throw new Error('Unexpected token, "{"email":"visitor.private@example.org"..." is not valid JSON');
+      },
+    });
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+    try {
+      assert.equal((await postEnquiry(failing.port, { name: "x" }, freshIp())).status, 500);
+    } finally {
+      console.error = originalError;
+      await failing.close();
+    }
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /^\[server\] unhandled error: Error: /);
+    assert.ok(logged[0].includes("[email redacted]"));
+    assert.ok(!logged[0].includes("visitor.private@example.org"));
+  });
+
+  it("after the response has started: logged once, redacted, and the connection closed", async () => {
+    const failing = await startApp({
+      contactHandler: async (_req, res) => {
+        const raw = res as unknown as http.ServerResponse;
+        raw.writeHead(200, { "Content-Type": "text/plain" });
+        raw.write("partial");
+        throw new Error("late failure for visitor.private@example.org");
+      },
+    });
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+    try {
+      // The response can't complete: the client must see the connection drop.
+      // (The shared request() helper only settles on a complete response.)
+      const outcome = await new Promise<string>((resolve) => {
+        const body = JSON.stringify({ name: "x" });
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port: failing.port,
+            method: "POST",
+            path: "/api/contact",
+            agent: false,
+            headers: { "content-type": "application/json", "content-length": String(body.length), "x-forwarded-for": freshIp() },
+          },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve("complete"));
+            res.on("error", () => resolve("dropped"));
+            res.on("close", () => resolve(res.complete ? "complete" : "dropped"));
+          }
+        );
+        req.on("error", () => resolve("dropped"));
+        req.setTimeout(5_000, () => {
+          resolve("timed out");
+          req.destroy();
+        });
+        req.end(body);
+      });
+      assert.equal(outcome, "dropped");
+      // Express's own fallback would have logged the raw stack as a second line.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      console.error = originalError;
+      await failing.close();
+    }
+    assert.equal(logged.length, 1, logged.join("\n---\n"));
+    assert.match(logged[0], /^\[server\] unhandled error: Error: late failure for \[email redacted\]/);
+    assert.ok(!logged.join("\n").includes("visitor.private@example.org"));
+  });
+});
+
+describe("fatal errors", () => {
+  const appModule = pathToFileURL(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../server/app.ts")).href;
+
+  /** Runs a script in a fresh Node process with the crash logging installed. */
+  function crash(script: string): { status: number | null; stderr: string } {
+    const code = `import { logFatalErrorsRedacted } from ${JSON.stringify(appModule)}; logFatalErrorsRedacted(); ${script}`;
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    return { status: result.status, stderr: result.stderr };
+  }
+
+  it("an uncaught exception is logged redacted and exits with code 1", () => {
+    const { status, stderr } = crash(`setTimeout(() => { throw new Error("crash for visitor.private@example.org"); });`);
+    assert.equal(status, 1, stderr);
+    assert.match(stderr, /\[server\] fatal uncaughtException; exiting: Error: crash for \[email redacted\]/);
+    assert.ok(!stderr.includes("visitor.private@example.org"), stderr);
+  });
+
+  it("an unhandled promise rejection is logged redacted and exits with code 1", () => {
+    const { status, stderr } = crash(`Promise.reject(new Error("rejected for visitor.private@example.org"));`);
+    assert.equal(status, 1, stderr);
+    assert.match(stderr, /\[server\] fatal unhandledRejection; exiting: Error: rejected for \[email redacted\]/);
+    assert.ok(!stderr.includes("visitor.private@example.org"), stderr);
   });
 });
 

@@ -25,6 +25,7 @@
  */
 
 import { isIP } from "node:net";
+import { inspect } from "node:util";
 import {
   validateEnquiry,
   hasErrors,
@@ -281,6 +282,75 @@ export function cleanMultiline(value: unknown, max: number): string {
       .trim()
       .slice(0, max)
   );
+}
+
+// ---------------------------------------------------------------------------
+// Log redaction
+//
+// What this server writes to stdout/stderr (on Azure, the console logs) may
+// be shipped to a log store with its own retention (see the privacy policy).
+// Error text can quote a visitor's email address: Resend's error responses
+// can repeat the value they rejected, and Node's JSON parse errors quote part
+// of the input. Every error this server logs goes through describeErrorForLog().
+//
+// This is best-effort: it removes anything shaped like an address, but can't
+// promise to catch every possible format. And it covers only what this
+// process logs. The platform's own HTTP request logs (Azure's
+// AppServiceHTTPLogs: client IP, URL with query string, user agent, referrer)
+// are written outside the app and are not redacted.
+// ---------------------------------------------------------------------------
+
+/**
+ * A run of characters that can't delimit an address in running text:
+ * anything except whitespace, quotes, backticks, angle brackets, brackets,
+ * commas, semicolons and colons. A single negated class with no alternation
+ * or nesting, so splitting text into these tokens is linear in its length —
+ * important because log text can come from outside (a deliberately crafted
+ * "a…@b…@…." must not be able to stall the server).
+ */
+const LOG_TOKEN = /[^\s"'`<>()[\]{},;:]+/g;
+
+/**
+ * Whether a token is shaped like local@domain.tld: a non-empty local part
+ * before the first "@" (or its URL-encoded form "%40", as in a query string),
+ * and a dot inside the domain part (not straight after the "@", not the final
+ * character, so "asha@example.com." at the end of a sentence still counts).
+ * A token that ends right at a literal "@" is also redacted: that is a local
+ * part cut off by a delimiter, as in "user@[203.0.113.7]". (Not for "%40",
+ * which also appears in ordinary text such as "100%40".) Plain index checks —
+ * linear, no backtracking.
+ */
+function looksLikeEmail(token: string): boolean {
+  let at = token.indexOf("@");
+  let width = 1;
+  if (at === -1) {
+    at = token.indexOf("%40");
+    width = 3;
+  }
+  if (at <= 0) return false;
+  if (at + width === token.length) return width === 1;
+  return token.slice(at + width + 1, -1).includes(".");
+}
+
+/**
+ * Replaces every email-like token with a fixed marker. Over-redaction is
+ * deliberate: a whole token goes (e.g. "user=asha@example.com"), never part
+ * of one, so no fragment of an address survives.
+ */
+export function redactEmails(text: string): string {
+  return text.replace(LOG_TOKEN, (token) => (looksLikeEmail(token) ? "[email redacted]" : token));
+}
+
+/**
+ * A log-safe description of a thrown value, with email addresses redacted.
+ * Objects (Errors included) are formatted as console.error() would format
+ * them: the stack, any extra properties, and the `cause` chain, which is
+ * where e.g. fetch() puts the network error behind "fetch failed".
+ * Primitives use String().
+ */
+export function describeErrorForLog(error: unknown): string {
+  const text = typeof error === "object" && error !== null ? inspect(error) : String(error);
+  return redactEmails(text);
 }
 
 /** Header injection guard for anything placed into an email header. */
@@ -586,7 +656,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     res.status(200).json({ ok: true });
   } catch (error) {
     // Log internally; never leak transport/credential details to the client.
-    console.error("[contact] delivery failed:", error);
+    // The log line itself carries no email addresses (describeErrorForLog).
+    console.error("[contact] delivery failed:", describeErrorForLog(error));
     res.status(500).json({
       ok: false,
       message: "We couldn't submit your request right now. Please try again.",
@@ -735,9 +806,12 @@ async function deliverEnquiry(payload: EnquiryPayload, submittedAt: Date): Promi
   }
 
   if (!response.ok) {
-    // Read the body for the server-side log only — never forwarded to the client.
+    // Read the body for the server-side log only — never forwarded to the
+    // client. Resend can quote the address it rejected, so email addresses
+    // are redacted before the text goes anywhere (and before truncating, so a
+    // cut can't leave half an address behind).
     const detail = await response.text().catch(() => "");
-    throw new Error(`Resend API responded ${response.status}: ${detail.slice(0, 500)}`);
+    throw new Error(`Resend API responded ${response.status}: ${redactEmails(detail).slice(0, 500)}`);
   }
 }
 
@@ -777,6 +851,6 @@ async function storeEnquiry(payload: EnquiryPayload, submittedAt: Date): Promise
     void payload;
     void submittedAt;
   } catch (error) {
-    console.error("[contact] storage failed (email was still sent):", error);
+    console.error("[contact] storage failed (email was still sent):", describeErrorForLog(error));
   }
 }
