@@ -38,15 +38,20 @@ package.json, package-lock.json
 node_modules/         production deps only: express, compression (npm ci --omit=dev)
 ```
 
-The server reads `PORT`, binds `0.0.0.0`, answers `GET /api/health` with 200,
-and shuts down gracefully on `SIGTERM` (in-flight requests finish, 15 s cap).
+The server reads `PORT`, binds `0.0.0.0`, answers `GET /api/health` with
+`200 {"ok":true,"version":"<commit SHA>"}`, and shuts down gracefully on
+`SIGTERM` (in-flight requests finish, 15 s cap). The SHA is embedded at build
+time by `scripts/build-server.mjs`, so a deployment can confirm the new build
+is actually serving.
 
 ### Azure App Service (Linux) — prepared, not yet live
 
-`.github/workflows/azure-app-service.yml` builds and smoke-tests the deployment
-package on every push and pull request. It **deploys only once the
-`AZURE_WEBAPP_NAME` repository variable exists**, authenticating with OIDC — no
-publish profile or client secret is stored.
+`.github/workflows/azure-app-service.yml` builds, runs `npm test`, and
+smoke-tests the deployment package on every push and pull request. It
+**deploys only once the `AZURE_WEBAPP_NAME` repository variable exists**,
+authenticating with OIDC — no publish profile or client secret is stored. A
+deploy succeeds only when `/api/health` on the app reports the commit that was
+just deployed, not merely a 200 from the previous build.
 
 One-time setup:
 
@@ -55,8 +60,9 @@ One-time setup:
    publishing **off**, Health check path `/api/health`.
 2. **App Settings**: `CONTACT_EMAIL`, `SMTP_FROM`, `RESEND_API_KEY` (as a Key
    Vault reference via the app's managed identity), `NODE_ENV=production`,
-   `SCM_DO_BUILD_DURING_DEPLOYMENT=false`. Set `CANONICAL_HOST=nexyronix.com`
-   only **after** the custom domain is bound. Don't set `PORT`.
+   `SCM_DO_BUILD_DURING_DEPLOYMENT=false`. Set `CANONICAL_HOST=www.nexyronix.com`
+   only **after** the custom domain is bound — see [Canonical domain](#canonical-domain).
+   Don't set `PORT`.
 3. **Startup command**: `node --enable-source-maps dist-server/index.js` (the
    workflow sets it on each deploy). Run node directly rather than `npm start`
    so SIGTERM reaches the server.
@@ -71,6 +77,22 @@ One-time setup:
 The workflow also runs on the `azure-migration` branch so Azure can be
 validated before anything reaches `main`. Remove that branch from the trigger
 after cutover.
+
+### Canonical domain
+
+The site's canonical address is **`https://www.nexyronix.com`**. The bare
+domain `nexyronix.com` is a DNS-level forwarder: it redirects `/` to `www` and
+answers **404 for every other path**. So:
+
+- Every absolute URL — canonical tags, Open Graph / Twitter images, structured
+  data, `sitemap.xml`, `robots.txt` — uses `www`. `test/build-output.test.ts`
+  fails the build if a bare-domain URL comes back.
+- `CANONICAL_HOST` must be `www.nexyronix.com`. **Never** set it to
+  `nexyronix.com` while the forwarder exists: the app would send `www` to the
+  bare domain and the forwarder would send it back — an endless redirect loop.
+- Set it only once `www.nexyronix.com` is bound to the Azure app. Until then,
+  every request to the `*.azurewebsites.net` address would redirect to `www`,
+  which still points at Railway.
 
 ### Railway — current production until cutover
 
@@ -94,7 +116,7 @@ the maintained path.
 | `CONTACT_EMAIL` | runtime | yes | Where enquiries are delivered |
 | `RESEND_API_KEY` | runtime | yes | **Secret.** [Resend](https://resend.com) API key, used over HTTPS (not SMTP), so outbound SMTP-port restrictions don't matter |
 | `SMTP_FROM` | runtime | yes | From address on a domain verified in Resend. Name kept from the earlier SMTP-based version |
-| `CANONICAL_HOST` | runtime | no | e.g. `nexyronix.com`; all other hostnames 301/308-redirect to it (`/api/health` exempt). Leave unset until the domain points at this deployment |
+| `CANONICAL_HOST` | runtime | no | `www.nexyronix.com` — all other hostnames 301/308-redirect to it (`/api/health` exempt). Leave unset until the domain points at this deployment; never the bare domain (see [Canonical domain](#canonical-domain)) |
 | `TRUST_PROXY_HOPS` | runtime | no | Proxies appending to `X-Forwarded-For` (default `1`; `2` with Front Door in front of App Service). Determines the client IP used for rate limiting |
 | `NODE_ENV` | runtime | recommended | `production` on the host. Not where the build runs — it would skip devDependencies |
 | `PORT` | runtime | no | Injected by the platform |
@@ -109,9 +131,17 @@ deliberately has no prefix, so Vite cannot bundle it.
 ## Build & type checking
 
 ```bash
-npm run typecheck   # app + server + vite config, three separate tsconfigs
-npm run build       # typecheck, then vite build, then esbuild bundles the server
+npm run typecheck   # app + server + tests + vite config, three separate tsconfigs
+npm run build       # typecheck, then vite build, then scripts/build-server.mjs bundles the server
+npm test            # node:test suites in test/ (run `npm run build` first for the build-output checks)
 ```
+
+`npm test` covers the enquiry API end to end (Resend is stubbed — no email is
+sent), the server's routes, headers and caching, the canonical redirect, the
+form-state rules, and the build output itself (three.js kept off the initial
+page load; `www` everywhere). The build-output checks are skipped without a
+build locally and mandatory in CI. The workflow runs the whole suite on every
+push and pull request.
 
 `build` deliberately type-checks first — Vite/esbuild strip types without
 checking them, so without this step type errors would ship silently.
@@ -121,7 +151,7 @@ Three tsconfigs, deliberately separate because they target different runtimes:
 | File | Covers | Runtime |
 |---|---|---|
 | `tsconfig.json` | `src/` | Browser (DOM libs, JSX) |
-| `tsconfig.server.json` | `api/`, `server/`, `src/shared/` | Node (`@types/node`) |
+| `tsconfig.server.json` | `api/`, `server/`, `src/shared/`, `test/` | Node (`@types/node`) |
 | `tsconfig.node.json` | `vite.config.ts` | Node (build tooling) |
 
 `src/shared/enquiry.ts` is intentionally in both the app and server projects —
@@ -135,7 +165,8 @@ it is isomorphic and must compile under both.
    startup (names only, never values).
 2. **Domain changes**: the canonical/Open Graph URLs in `index.html`,
    `public/sitemap.xml`, `public/robots.txt` and the legal pages are
-   hard-coded to `https://nexyronix.com`.
+   hard-coded to `https://www.nexyronix.com` (see [Canonical domain](#canonical-domain)).
+   Update each page's `<lastmod>` in the sitemap when its content changes.
 3. **DNS moves**: keep Resend's DKIM/SPF records and the mailbox MX records
    intact when repointing the site.
 4. **Scaling out**: the rate limiter is in-memory, so each instance counts
@@ -168,26 +199,41 @@ sent — client-side validation is purely for fast feedback and is never trusted
 - Server-side revalidation of every field; unknown fields are dropped via an explicit whitelist
 - HTML-escaping of all values before they enter the notification email (XSS)
 - Email-header sanitization (CRLF stripping) to prevent header injection
-- Per-IP rate limiting (5 submissions / 10 minutes), keyed on the address the trusted proxy
-  appended to `X-Forwarded-For` — never the client-written leftmost entry — with ports stripped,
-  IPv4-mapped IPv6 unwrapped, and IPv6 bucketed per /64
-- Request body cap of 8 MB (sized for a base64-encoded 5 MB resume); oversized bodies get a 413
-- Resume uploads: PDF/DOC/DOCX only, ≤ 5 MB, verified by file signature, renamed server-side,
-  attached to the email and never stored
+- Per-client rate limiting over a 10-minute window: **5 accepted enquiries** (ones that pass
+  validation and would send an email) and **20 attempts of any kind**, so fixing a typo and
+  resubmitting doesn't lock anyone out. Keyed on the address the trusted proxy appended to
+  `X-Forwarded-For` — never the client-written leftmost entry — with ports stripped, IPv4-mapped
+  IPv6 unwrapped, and IPv6 bucketed per /64. At most 10,000 clients are tracked; the least
+  recently active is forgotten first
+- Request body cap of ~6.9 MB, derived from the 5 MB resume cap (base64 adds a third, plus
+  256 KB for the other fields); oversized bodies get a 413. Only `application/json` is accepted
+  (415 otherwise)
+- Resume uploads: PDF/DOC/DOCX only, ≤ 5 MB, checked against each format's real structure,
+  renamed server-side, attached to the email and never stored. A DOCX must be a ZIP whose table
+  of contents is a Word document's (`[Content_Types].xml`, `word/document.xml`, parts only under
+  `_rels/`, `docProps/`, `word/`, `customXml/`); macros, ActiveX, embedded OLE objects,
+  executables, encrypted entries and path tricks are refused. The base64 must survive a decode /
+  re-encode round trip, and the attachment is built from the checked bytes
 - Honeypot field; bots that fill it get a 200 with no delivery, so they learn nothing
 - Generic client-facing errors — transport and credential failures are logged server-side only
 
-**Server behaviour** (`server/index.ts`): security headers on every response (CSP, HSTS,
+**Server behaviour** (`server/app.ts` builds the Express app; `server/index.ts` reads the
+environment, listens and handles shutdown): security headers on every response (CSP, HSTS,
 X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy) plus a stricter
 `Content-Security-Policy-Report-Only` candidate that drops `'unsafe-inline'`/`'unsafe-eval'` from
 `script-src` — it only logs browser console warnings and blocks nothing. Hashed files in
-`dist/assets/` are cached for a year, other static files for an hour, HTML always revalidates.
-Unknown pages get the branded 404 with a real 404 status; unknown `/api/*` routes get JSON 404s;
-`/api/contact` answers non-POST methods with 405.
+`dist/assets/` are cached for a year, other static files for an hour, HTML always revalidates,
+and every `/api/*` response is `no-store`. Unknown pages get the branded 404 with a real 404
+status; unknown `/api/*` routes get JSON 404s; `/api/contact` answers non-POST methods with 405.
+`/index.html`, `/privacy-policy.html` and `/terms-of-use.html` 301 to their clean URLs.
+Request bodies are parsed **only** for `POST /api/contact`, and only after the rate limit is
+checked — a client already over its limit has its upload discarded unparsed and gets a 429. An
+unexpected error in the handler becomes a generic 500 instead of crashing the process.
+Keep-alive (65 s), header (66 s) and request (180 s) timeouts suit a pooling front end.
 
 **Rate limiting is in-memory**, which suits a single instance and fails safe on cold start. For
-multi-instance deployments, swap the `Map` in `api/contact.ts` for Redis or your platform's KV
-store; the interface is deliberately tiny.
+multi-instance deployments, swap the `Map` inside `SlidingWindowLimiter` in `api/contact.ts` for
+Redis or your platform's KV store; the interface is deliberately tiny.
 
 **Optional storage — not implemented.** `storeEnquiry()` is a documented no-op hook: it returns
 early when `DATABASE_URL` is unset and does nothing when it is set. There is no database driver
