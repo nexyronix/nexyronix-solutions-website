@@ -120,6 +120,73 @@ describe("POST /api/contact — delivery", () => {
     }
   });
 
+  it("never logs an email address, even when Resend's error quotes one", async () => {
+    resend.restore();
+    // Resend-style 422 bodies that repeat the rejected values.
+    resend = stubResend(
+      (call) =>
+        new Response(
+          JSON.stringify({
+            statusCode: 422,
+            name: "validation_error",
+            message: `Invalid \`reply_to\` field: ${call.body.reply_to}. Sender ${call.body.from}, recipient ${call.body.to[0]}`,
+          }),
+          { status: 422 }
+        )
+    );
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+    try {
+      const res = await postEnquiry(app.port, { ...VALID, email: "visitor.private@example.org" }, freshIp());
+      assert.equal(res.status, 500);
+      assert.ok(!res.text.includes("@"), "nothing about the failure reaches the visitor");
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(logged.length, 1);
+    const line = logged[0];
+    assert.match(line, /^\[contact\] delivery failed: Error: Resend API responded 422: /, "the alertable prefix is kept");
+    assert.ok(line.includes("[email redacted]"));
+    for (const address of ["visitor.private@example.org", "noreply@example.com", "inbox@example.com"]) {
+      assert.ok(!line.includes(address), `${address} must not be logged`);
+    }
+    assert.ok(!/[^\s@]+@[^\s@]+\.[^\s@]+/.test(line), "no email-like text at all");
+  });
+
+  it("redacts before truncating, so the 500-character cut can't leave part of an address", async () => {
+    resend.restore();
+    // The address straddles character 500 of Resend's response body.
+    resend = stubResend(() => new Response("x".repeat(488) + " visitor.private@example.org tail", { status: 422 }));
+    const logged: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+    try {
+      assert.equal((await postEnquiry(app.port, VALID, freshIp())).status, 500);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(logged.length, 1);
+    assert.ok(!logged[0].includes("visitor"), "no fragment of the local part");
+    assert.ok(!logged[0].includes("@example"), "no fragment of the domain");
+  });
+
+  it("still logs the alertable line when Resend's error body is empty or not JSON", async () => {
+    for (const body of ["", "<html><body>Bad Gateway</body></html>"]) {
+      resend.restore();
+      resend = stubResend(() => new Response(body, { status: 502 }));
+      const logged: string[] = [];
+      const originalError = console.error;
+      console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+      try {
+        assert.equal((await postEnquiry(app.port, VALID, freshIp())).status, 500);
+      } finally {
+        console.error = originalError;
+      }
+      assert.match(logged[0], /^\[contact\] delivery failed: Error: Resend API responded 502:/, JSON.stringify(body));
+    }
+  });
+
   it("takes the honeypot silently: 200, nothing sent", async () => {
     const res = await postEnquiry(app.port, { ...VALID, website: "http://spam.example" }, freshIp());
     assert.equal(res.status, 200);

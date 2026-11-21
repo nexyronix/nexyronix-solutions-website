@@ -16,7 +16,11 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createApp } from "./app";
+import { describeErrorForLog } from "../api/contact";
+import { createApp, logFatalErrorsRedacted } from "./app";
+
+// First, so a crash at any later point is logged with addresses redacted.
+logFatalErrorsRedacted();
 
 // Named to avoid shadowing the __dirname global that @types/node declares.
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -118,7 +122,7 @@ function shutdown(signal: NodeJS.Signals): void {
   server.close((err) => {
     clearInterval(sweep);
     if (err) {
-      console.error("[server] error while closing:", err);
+      console.error("[server] error while closing:", describeErrorForLog(err));
       process.exit(1);
     }
     console.log("[server] all connections closed; exiting");

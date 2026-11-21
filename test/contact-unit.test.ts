@@ -7,7 +7,9 @@ import assert from "node:assert/strict";
 import {
   cleanLine,
   cleanMultiline,
+  describeErrorForLog,
   rateLimitKey,
+  redactEmails,
   SlidingWindowLimiter,
   validateResume,
   MAX_BODY_BYTES,
@@ -36,6 +38,100 @@ describe("cleanLine (single-line fields)", () => {
   it("turns line breaks and control characters into spaces — header-injection safe", () => {
     assert.equal(cleanLine("Asha\r\nBcc: victim@example.com", 100), "Asha  Bcc: victim@example.com");
     assert.equal(cleanLine("a\tb\u0000c", 100), "a b c");
+  });
+});
+
+describe("redactEmails (log redaction)", () => {
+  const R = "[email redacted]";
+
+  it("redacts addresses in the shapes provider errors and parse errors use", () => {
+    for (const [input, expected] of [
+      ["asha@example.com", R],
+      ["Invalid `reply_to` field: asha.rao+cv@mail.example.co.in", `Invalid \`reply_to\` field: ${R}`],
+      ['{"message":"Invalid `to`: inbox@example.com","name":"validation_error"}', `{"message":"Invalid \`to\`: ${R}","name":"validation_error"}`],
+      ["Nexyronix <noreply@nexyronix.com>", `Nexyronix <${R}>`],
+      ["'quoted@example.org' and (paren@example.net), list;semi@example.com", `'${R}' and (${R}), list;${R}`],
+      ['Unexpected token, "{"email":"asha@example.com"..." is not valid JSON', `Unexpected token, "{"email":"${R}"..." is not valid JSON`],
+      ["Rejected asha@example.com.", `Rejected ${R}`],
+      ["mailto:asha@example.com", `mailto:${R}`],
+      ["user=asha@example.com&x=1", R],
+      ["a@b@c.example.com", R],
+      // Upper case, internationalised domains, IP-literal domains.
+      ["ASHA.RAO@EXAMPLE.COM", R],
+      ["anjali@उदाहरण.भारत", R],
+      ["user@[203.0.113.7]", `${R}[203.0.113.7]`],
+      // URL-encoded inside a URL or query string: the whole token goes.
+      ["GET https://api.example.com/v1?to=asha%40example.com&x=1 failed", `GET https:${R} failed`],
+      ["asha%40example.com", R],
+      // Several addresses across the lines of a stack trace.
+      ["Error: rejected a@example.com\n    at deliver (contact.ts:1:1)\n    cc b@example.org", `Error: rejected ${R}\n    at deliver (contact.ts:1:1)\n    cc ${R}`],
+    ] as const) {
+      assert.equal(redactEmails(input), expected, input);
+    }
+  });
+
+  it("leaves text without addresses untouched", () => {
+    for (const input of [
+      "Resend API responded 500: internal error",
+      "The nexyronix.com domain is not verified",
+      "user @ example.com",
+      "@handle mentioned",
+      "a@b",
+      "100%40 percent",
+      "version 1.2.3@beta",
+      "",
+    ]) {
+      assert.equal(redactEmails(input), input, input);
+    }
+  });
+
+  it("accepts over-redaction of look-alikes rather than risk a leak", () => {
+    // package@version strings with a dotted version look like addresses.
+    assert.equal(redactEmails("upgrade express@4.22.3 now"), "upgrade [email redacted] now");
+  });
+
+  it("stays fast on hostile input (no catastrophic backtracking)", () => {
+    // Inputs that make a naive local@domain.tld regex backtrack quadratically.
+    const hostile = [
+      "a".repeat(200_000) + "@" + "b".repeat(200_000) + "@" + ".".repeat(200_000),
+      ("x@" + "y".repeat(50)).repeat(20_000),
+      "@".repeat(500_000),
+    ];
+    for (const input of hostile) {
+      const started = performance.now();
+      redactEmails(input);
+      assert.ok(performance.now() - started < 500, `linear time on a ${input.length}-character input`);
+    }
+  });
+});
+
+describe("describeErrorForLog", () => {
+  it("keeps the error type, message and stack, with addresses redacted", () => {
+    const text = describeErrorForLog(new Error("Resend API responded 422: rejected asha@example.com"));
+    assert.match(text, /^Error: Resend API responded 422: rejected \[email redacted\]/);
+    assert.match(text, /\n\s+at /, "stack frames are kept for debugging");
+    assert.ok(!text.includes("asha@example.com"));
+  });
+
+  it("keeps the cause chain (e.g. the network error behind 'fetch failed'), redacted", () => {
+    const cause = Object.assign(new Error("connect ECONNREFUSED for asha@example.com"), { code: "ECONNREFUSED" });
+    const text = describeErrorForLog(new TypeError("fetch failed", { cause }));
+    assert.match(text, /^TypeError: fetch failed/);
+    assert.match(text, /\[cause\]: Error: connect ECONNREFUSED for \[email redacted\]/);
+    assert.match(text, /code: 'ECONNREFUSED'/);
+    assert.ok(!text.includes("asha@example.com"));
+  });
+
+  it("redacts addresses in an error's extra properties", () => {
+    const text = describeErrorForLog(Object.assign(new Error("rejected"), { to: ["asha@example.com"] }));
+    assert.ok(text.includes("[email redacted]"));
+    assert.ok(!text.includes("asha@example.com"));
+  });
+
+  it("handles values that aren't Errors", () => {
+    assert.equal(describeErrorForLog("plain asha@example.com"), "plain [email redacted]");
+    assert.equal(describeErrorForLog(42), "42");
+    assert.equal(describeErrorForLog(undefined), "undefined");
   });
 });
 

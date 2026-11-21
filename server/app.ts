@@ -7,9 +7,11 @@
 
 import express from "express";
 import compression from "compression";
+import { writeSync } from "node:fs";
 import path from "node:path";
 import defaultContactHandler, {
   MAX_BODY_BYTES,
+  describeErrorForLog,
   isClientRateLimited,
   sendRateLimited,
   type ApiRequest,
@@ -259,18 +261,44 @@ export function createApp(options: AppOptions): express.Express {
   // page, not a silent 200 of the homepage.
   app.use((_req, res) => sendPage(res, distPath, "404.html", 404));
 
-  // Last-resort handler: log internally, return nothing revealing. If the
-  // response had already started, Express's own handler closes the connection.
-  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error("[server] unhandled error:", err);
+  // Last-resort handler: log internally, return nothing revealing. The log
+  // line has email addresses redacted: an error here can quote request data
+  // (Node's JSON parse errors, for one, include part of the input).
+  // If the response had already started, close the connection — what
+  // Express's own fallback does — rather than hand the error on: that fallback
+  // would log the raw, unredacted stack a second time.
+  app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[server] unhandled error:", describeErrorForLog(err));
     if (res.headersSent) {
-      next(err);
+      req.socket.destroy();
       return;
     }
     res.status(500).json({ ok: false, message: "Something went wrong. Please try again." });
   });
 
   return app;
+}
+
+/**
+ * Logs a crash with email addresses redacted, like every other error this
+ * server logs — Node's own crash report prints the raw error. The process
+ * still exits with code 1, as Node does by default, so the platform restarts
+ * it exactly as before. Unhandled promise rejections arrive here too (origin
+ * "unhandledRejection"): with no rejection handler, Node raises them as
+ * uncaught exceptions. Called once, by server/index.ts.
+ *
+ * The line is written synchronously, as Node's own crash report is: on Linux
+ * stderr is usually a pipe, where console.error() is asynchronous, and the
+ * process.exit() that follows can drop output still queued.
+ */
+export function logFatalErrorsRedacted(): void {
+  process.on("uncaughtException", (err, origin) => {
+    try {
+      writeSync(process.stderr.fd, `[server] fatal ${origin}; exiting: ${describeErrorForLog(err)}\n`);
+    } finally {
+      process.exit(1);
+    }
+  });
 }
 
 function sendPage(res: express.Response, distPath: string, file: string, status = 200): void {

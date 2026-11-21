@@ -87,6 +87,14 @@ One-time setup:
    with a required reviewer, so every deploy waits for approval. A manual run
    on any other branch is refused by the environment.
 
+### Rollback
+
+To put a known-good version back into production, follow
+[docs/rollback-runbook.md](docs/rollback-runbook.md). It covers re-running a
+known-good `main` build (fast, temporary) and reverting the bad change through
+a pull request (permanent) — both within the `main`-only, approval-gated
+production setup.
+
 ### Canonical domain
 
 The site's canonical address is **`https://www.nexyronix.com`**. The bare
