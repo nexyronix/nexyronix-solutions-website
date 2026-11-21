@@ -9,7 +9,10 @@
  * - Every field is re-validated here. The client's validation is never trusted.
  * - Unknown fields are dropped; only the whitelisted shape is ever used.
  * - All values are escaped before being embedded in the HTML email (XSS).
- * - Rate limited per IP. Body size capped. Honeypot checked.
+ * - Rate limited per client (accepted enquiries and raw attempts are capped
+ *   separately). Body size capped. Only JSON accepted. Honeypot checked.
+ * - Resume uploads are checked against each format's real structure, not
+ *   just the file extension.
  * - Credentials come from environment variables only — never from source.
  * - Error responses are generic; internal failures are logged server-side only.
  *
@@ -58,43 +61,108 @@ export interface ApiResponse {
   setHeader: (name: string, value: string) => void;
 }
 
-// A resume, base64-encoded (~37% larger than the original), can legitimately
-// be close to RESUME_MAX_BYTES (5 MB) on its own; the cap here has headroom
-// on top of that for the encoding overhead plus the rest of the form fields.
-const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB
+/**
+ * Largest request body accepted, in bytes (~6.9 MB). Derived from the resume
+ * cap so the two can't drift: base64 turns every 3 bytes into 4, and 256 KB
+ * on top covers the text fields (a few KB at most) and JSON overhead. The
+ * Express server applies the same number to its body parser.
+ */
+export const MAX_BODY_BYTES = Math.ceil(RESUME_MAX_BYTES / 3) * 4 + 256 * 1024;
 
 // ---------------------------------------------------------------------------
 // Rate limiting
 //
-// In-memory: fine for a single instance, and it degrades safely (a cold start
-// resets the window). For multi-instance deployments swap the Map for Redis or
-// your platform's KV store — the interface below is deliberately small.
+// Two independent sliding windows per client:
+//  - submissions: enquiries that passed validation and would send an email.
+//    This is the real anti-spam limit.
+//  - attempts: every POST, valid or not. Bounds how much work one client can
+//    cause, without locking out someone who fixes a typo and resubmits.
+//
+// In-memory: fine for a single instance, and it degrades safely (a restart
+// resets the windows). For multi-instance deployments swap the Map for Redis
+// or your platform's KV store — the interface below is deliberately small.
 // ---------------------------------------------------------------------------
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
-const RATE_LIMIT_MAX = 5; // submissions per IP per window
+const MAX_SUBMISSIONS = 5; // accepted enquiries per client per window
+const MAX_ATTEMPTS = 20; // any POST per client per window
+// Memory bound: beyond this many clients the least recently active one is
+// forgotten. Each entry holds at most MAX_ATTEMPTS timestamps.
+const MAX_TRACKED_CLIENTS = 10_000;
 
-const submissions = new Map<string, number[]>();
+const RATE_LIMITED_MESSAGE = "Too many enquiries from this connection. Please try again shortly.";
 
-function isRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const recent = (submissions.get(ip) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+/**
+ * Sliding-window counter with a hard cap on tracked keys. The Map's insertion
+ * order doubles as recency order (a key is re-inserted on every hit), so the
+ * eviction candidate is always the first key — O(1), never a full sweep.
+ */
+export class SlidingWindowLimiter {
+  private readonly hits = new Map<string, number[]>();
+  private readonly max: number;
+  private readonly windowMs: number;
+  private readonly maxKeys: number;
 
-  if (recent.length >= RATE_LIMIT_MAX) {
-    submissions.set(ip, recent);
-    return true;
+  constructor(max: number, windowMs: number, maxKeys: number) {
+    this.max = max;
+    this.windowMs = windowMs;
+    this.maxKeys = maxKeys;
   }
 
-  recent.push(now);
-  submissions.set(ip, recent);
+  /** True if `key` has used its allowance. Records nothing. */
+  isLimited(key: string, now = Date.now()): boolean {
+    return this.recent(key, now).length >= this.max;
+  }
 
-  // Opportunistic cleanup so the Map can't grow without bound
-  if (submissions.size > 5000) {
-    for (const [key, times] of submissions) {
-      if (times.every((t) => now - t >= RATE_LIMIT_WINDOW_MS)) submissions.delete(key);
+  /**
+   * Records one hit for `key`, unless it is already limited. Returns true when
+   * the hit was refused (and therefore not recorded).
+   */
+  hit(key: string, now = Date.now()): boolean {
+    const recent = this.recent(key, now);
+    if (recent.length >= this.max) return true;
+
+    recent.push(now);
+    this.hits.delete(key);
+    this.hits.set(key, recent);
+
+    while (this.hits.size > this.maxKeys) {
+      const oldest = this.hits.keys().next().value;
+      if (oldest === undefined) break;
+      this.hits.delete(oldest);
     }
+    return false;
   }
 
-  return false;
+  /** Number of keys currently tracked (for tests and diagnostics). */
+  get size(): number {
+    return this.hits.size;
+  }
+
+  private recent(key: string, now: number): number[] {
+    const times = this.hits.get(key);
+    if (!times) return [];
+    const recent = times.filter((t) => now - t < this.windowMs);
+    if (recent.length === 0) this.hits.delete(key);
+    else if (recent.length !== times.length) this.hits.set(key, recent);
+    return recent;
+  }
+}
+
+const attempts = new SlidingWindowLimiter(MAX_ATTEMPTS, RATE_LIMIT_WINDOW_MS, MAX_TRACKED_CLIENTS);
+const submissions = new SlidingWindowLimiter(MAX_SUBMISSIONS, RATE_LIMIT_WINDOW_MS, MAX_TRACKED_CLIENTS);
+
+/**
+ * True when this client has no allowance left. Records nothing, so a host can
+ * call it BEFORE reading the request body — a client that is already limited
+ * never gets a multi-megabyte upload parsed.
+ */
+export function isClientRateLimited(req: ApiRequest): boolean {
+  const ip = clientIp(req);
+  return attempts.isLimited(ip) || submissions.isLimited(ip);
+}
+
+export function sendRateLimited(res: ApiResponse): void {
+  res.status(429).json({ ok: false, message: RATE_LIMITED_MESSAGE });
 }
 
 /**
@@ -134,7 +202,7 @@ function clientIp(req: ApiRequest): string {
  *   /64 and can rotate through it freely.
  * Anything unparseable shares one "unknown" bucket — failing closed, not open.
  */
-function rateLimitKey(raw: string): string {
+export function rateLimitKey(raw: string): string {
   let ip = raw.trim();
 
   const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(ip); // "[2001:db8::1]:443"
@@ -189,11 +257,34 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#039;");
 }
 
-/** Strips control characters and trims. Applied before validation. */
-function clean(value: unknown, max: number): string {
+/**
+ * Single-line fields: every control character — line breaks included —
+ * becomes a space, then the value is trimmed and capped. Applied before
+ * validation.
+ */
+export function cleanLine(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
   // eslint-disable-next-line no-control-regex
   return value.replace(/[\u0000-\u001F\u007F]/g, " ").trim().slice(0, max);
+}
+
+/**
+ * Multi-line fields (the message). Line breaks carry the structure of what
+ * someone wrote — paragraphs, lists — so they are kept, normalised to "\n".
+ * Tabs are kept; every other control character becomes a space. The email
+ * renders the result with white-space: pre-wrap, and HTML is escaped
+ * separately, so keeping newlines adds no injection surface.
+ */
+export function cleanMultiline(value: unknown, max: number): string {
+  if (typeof value !== "string") return "";
+  return (
+    value
+      .replace(/\r\n?/g, "\n")
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, " ")
+      .trim()
+      .slice(0, max)
+  );
 }
 
 /** Header injection guard for anything placed into an email header. */
@@ -213,25 +304,123 @@ function safeHeader(value: string): string {
 
 type ResumeExt = (typeof RESUME_ALLOWED_EXTENSIONS)[number];
 
+type FileCheck = "ok" | "invalid" | "active-content";
+
 /**
- * Checks the actual leading bytes against each format's real signature — an
- * extension check alone is defeated by renaming a .exe to .pdf, which costs
- * an attacker nothing. DOCX is itself a ZIP archive, so this only confirms
- * "is a ZIP file" for that one; fully validating its internal structure
- * would need real ZIP parsing, which is more than a resume upload warrants.
- * PDF and DOC (legacy binary/OLE2) are fully verified.
+ * Checks the actual bytes, never just the extension — renaming a .exe to
+ * .pdf costs an attacker nothing.
+ * - PDF: the "%PDF" signature.
+ * - DOC (legacy binary / OLE2): the 8-byte compound-file signature.
+ * - DOCX: a ZIP archive whose contents are a Word document — see checkDocx.
  */
-function matchesFileSignature(buffer: Buffer, ext: ResumeExt): boolean {
+function checkFileContents(buffer: Buffer, ext: ResumeExt): FileCheck {
   switch (ext) {
     case "pdf":
-      return buffer.subarray(0, 4).toString("latin1") === "%PDF";
+      return buffer.subarray(0, 4).toString("latin1") === "%PDF" ? "ok" : "invalid";
     case "doc":
       return buffer
         .subarray(0, 8)
-        .equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+        .equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
+        ? "ok"
+        : "invalid";
     case "docx":
-      return buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+      return checkDocx(buffer);
   }
+}
+
+// --- DOCX structure ----------------------------------------------------------
+// A .docx is a ZIP archive, so a signature check alone would accept ANY zip —
+// including one carrying an executable — and that file is then emailed to the
+// team. Reading the archive's central directory (its table of contents) is
+// cheap and needs no decompression: nothing is ever extracted.
+
+/** Parts every Word document has. */
+const DOCX_REQUIRED_PARTS = ["[content_types].xml", "word/document.xml"];
+
+/** Where a Word document's parts live. Anything elsewhere has no business in a resume. */
+const DOCX_ALLOWED_LOCATIONS = ["[content_types].xml", "_rels/", "docprops/", "word/", "customxml/"];
+
+/**
+ * Parts that carry active content: VBA macros (only legitimate in .docm),
+ * ActiveX controls, embedded OLE objects (a long-standing malware vehicle, and
+ * the format of the old Equation Editor), and executable or script files.
+ */
+const DOCX_ACTIVE_CONTENT =
+  /(^|\/)vbaproject\.bin$|(^|\/)vbadata\.xml$|^word\/activex\/|^word\/embeddings\/.*\.bin$|\.(exe|dll|com|scr|pif|cpl|bat|cmd|ps1|vbs|vbe|js|jse|wsf|wsh|hta|msi|jar|lnk)$/;
+
+const ZIP_MAX_ENTRIES = 2000;
+const ZIP_LOCAL_HEADER = 0x04034b50;
+const ZIP_CENTRAL_HEADER = 0x02014b50;
+const ZIP_END_OF_DIRECTORY = 0x06054b50;
+
+function checkDocx(buffer: Buffer): FileCheck {
+  if (buffer.length < 30 || buffer.readUInt32LE(0) !== ZIP_LOCAL_HEADER) return "invalid";
+
+  const entries = readZipDirectory(buffer);
+  if (!entries) return "invalid";
+
+  const names = new Set<string>();
+  for (const { name, encrypted } of entries) {
+    if (encrypted) return "invalid"; // can't be inspected, and Word never does this
+    const lower = name.toLowerCase();
+    // Never extracted, but a ".." or absolute path would dodge the location check.
+    if (!lower || lower.startsWith("/") || lower.includes("\\") || lower.includes("\0")) return "invalid";
+    if (lower.split("/").includes("..")) return "invalid";
+    if (DOCX_ACTIVE_CONTENT.test(lower)) return "active-content";
+    if (!DOCX_ALLOWED_LOCATIONS.some((loc) => (loc.endsWith("/") ? lower.startsWith(loc) : lower === loc))) {
+      return "invalid";
+    }
+    names.add(lower);
+  }
+
+  return DOCX_REQUIRED_PARTS.every((part) => names.has(part)) ? "ok" : "invalid";
+}
+
+/**
+ * Reads entry names from a ZIP's central directory, or returns null if the
+ * archive is malformed, truncated, split across disks, ZIP64, or has more
+ * entries than any resume would. Every offset is bounds-checked.
+ */
+function readZipDirectory(buffer: Buffer): { name: string; encrypted: boolean }[] | null {
+  // The end-of-central-directory record is 22 bytes plus a comment of up to
+  // 65,535 bytes, so it must start within the archive's last 65,557 bytes.
+  const searchFloor = Math.max(0, buffer.length - (22 + 0xffff));
+  let eocd = -1;
+  for (let i = buffer.length - 22; i >= searchFloor; i--) {
+    if (buffer.readUInt32LE(i) === ZIP_END_OF_DIRECTORY) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd === -1) return null;
+
+  const thisDisk = buffer.readUInt16LE(eocd + 4);
+  const directoryDisk = buffer.readUInt16LE(eocd + 6);
+  const entriesOnDisk = buffer.readUInt16LE(eocd + 8);
+  const totalEntries = buffer.readUInt16LE(eocd + 10);
+  const directorySize = buffer.readUInt32LE(eocd + 12);
+  const directoryOffset = buffer.readUInt32LE(eocd + 16);
+
+  if (thisDisk !== 0 || directoryDisk !== 0 || entriesOnDisk !== totalEntries) return null;
+  if (totalEntries === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) return null;
+  if (totalEntries === 0 || totalEntries > ZIP_MAX_ENTRIES) return null;
+  const directoryEnd = directoryOffset + directorySize;
+  if (directoryEnd > eocd) return null;
+
+  const entries: { name: string; encrypted: boolean }[] = [];
+  let p = directoryOffset;
+  for (let n = 0; n < totalEntries; n++) {
+    if (p + 46 > directoryEnd || buffer.readUInt32LE(p) !== ZIP_CENTRAL_HEADER) return null;
+    const flags = buffer.readUInt16LE(p + 8);
+    const nameLength = buffer.readUInt16LE(p + 28);
+    const extraLength = buffer.readUInt16LE(p + 30);
+    const commentLength = buffer.readUInt16LE(p + 32);
+    const nameEnd = p + 46 + nameLength;
+    if (nameEnd > directoryEnd) return null;
+    entries.push({ name: buffer.toString("utf8", p + 46, nameEnd), encrypted: (flags & 0x1) !== 0 });
+    p = nameEnd + extraLength + commentLength;
+  }
+  return entries;
 }
 
 /** Never the user-supplied filename — that could carry path-traversal characters or arbitrary unicode. */
@@ -252,7 +441,7 @@ function safeResumeFilename(name: string, ext: ResumeExt): string {
  * to Resend. Silently drops the resume (no error) if it wasn't offered for
  * this enquiry type at all, matching the client's own conditional field.
  */
-function validateResume(
+export function validateResume(
   resume: unknown,
   enquiryType: string,
   applicantName: string
@@ -278,10 +467,13 @@ function validateResume(
     return { error: "Please upload a PDF, DOC or DOCX file." };
   }
 
-  let buffer: Buffer;
-  try {
-    buffer = Buffer.from(base64, "base64");
-  } catch {
+  // Buffer.from silently skips characters that aren't base64, so decode and
+  // re-encode: only input that survives the round trip unchanged is genuine
+  // base64 (the browser's FileReader always produces that). The attachment is
+  // then built from the canonical re-encoding of the bytes that were checked.
+  const buffer = Buffer.from(base64, "base64");
+  const canonical = buffer.toString("base64");
+  if (canonical !== base64) {
     return { error: "We couldn't read that file. Please try again." };
   }
 
@@ -289,7 +481,14 @@ function validateResume(
     return { error: `Please keep your resume under ${RESUME_MAX_BYTES / (1024 * 1024)} MB.` };
   }
 
-  if (!matchesFileSignature(buffer, ext as ResumeExt)) {
+  const check = checkFileContents(buffer, ext as ResumeExt);
+  if (check === "active-content") {
+    return {
+      error:
+        "That document contains macros or embedded objects. Please save it without them, or upload a PDF.",
+    };
+  }
+  if (check !== "ok") {
     return { error: "That file doesn't look like a valid resume." };
   }
 
@@ -297,7 +496,7 @@ function validateResume(
     attachment: {
       filename: safeResumeFilename(applicantName, ext as ResumeExt),
       mimeType: RESUME_MIME_TYPES[ext as ResumeExt],
-      base64,
+      base64: canonical,
     },
   };
 }
@@ -313,6 +512,14 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     return;
   }
 
+  // The form always sends JSON. Anything else would arrive unparsed, so say
+  // so plainly instead of answering with a confusing set of field errors.
+  const contentType = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+  if (contentType !== "application/json") {
+    res.status(415).json({ ok: false, message: "That request could not be read." });
+    return;
+  }
+
   // Reject oversized bodies before doing any work
   const contentLength = Number(req.headers["content-length"] ?? 0);
   if (contentLength > MAX_BODY_BYTES) {
@@ -321,11 +528,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   }
 
   const ip = clientIp(req);
-  if (isRateLimited(ip)) {
-    res.status(429).json({
-      ok: false,
-      message: "Too many enquiries from this connection. Please try again shortly.",
-    });
+  if (attempts.hit(ip)) {
+    sendRateLimited(res);
     return;
   }
 
@@ -336,21 +540,21 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 
   // Honeypot: a hidden field real users never fill. Respond 200 so bots get no
   // signal that they were caught, but do nothing with the submission.
-  if (clean(body.website, 100)) {
+  if (cleanLine(body.website, 100)) {
     res.status(200).json({ ok: true });
     return;
   }
 
   // Whitelist — anything else the client sent is discarded
   const payload: EnquiryPayload = {
-    name: clean(body.name, LIMITS.name),
-    email: clean(body.email, LIMITS.email),
-    phone: clean(body.phone, LIMITS.phone),
-    organization: clean(body.organization, LIMITS.organization),
-    enquiryType: clean(body.enquiryType, 60),
-    budget: clean(body.budget, 60),
-    source: clean(body.source, 60),
-    message: clean(body.message, LIMITS.message),
+    name: cleanLine(body.name, LIMITS.name),
+    email: cleanLine(body.email, LIMITS.email),
+    phone: cleanLine(body.phone, LIMITS.phone),
+    organization: cleanLine(body.organization, LIMITS.organization),
+    enquiryType: cleanLine(body.enquiryType, 60),
+    budget: cleanLine(body.budget, 60),
+    source: cleanLine(body.source, 60),
+    message: cleanMultiline(body.message, LIMITS.message),
   };
 
   const errors = validateEnquiry(payload);
@@ -365,6 +569,12 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 
   if (hasErrors(errors)) {
     res.status(400).json({ ok: false, message: "Please check the highlighted fields.", errors });
+    return;
+  }
+
+  // Counted only once an enquiry is valid, i.e. would actually send an email.
+  if (submissions.hit(ip)) {
+    sendRateLimited(res);
     return;
   }
 
