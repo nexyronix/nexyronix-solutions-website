@@ -23,11 +23,12 @@ export const SOCIAL_LINKS: SocialLink[] = [];
  * Canonical origin. Override per-environment with VITE_SITE_URL.
  *
  * NOTE: nothing imports this yet. The canonical tag, Open Graph URLs, sitemap
- * and robots.txt are static files with https://nexyronix.com hard-coded
+ * and robots.txt are static files with https://www.nexyronix.com hard-coded
  * (index.html, public/sitemap.xml, public/robots.txt, the legal pages), so
- * changing VITE_SITE_URL alone does not change them.
+ * changing VITE_SITE_URL alone does not change them. www, not the bare
+ * domain: the bare domain only forwards "/" to www (see index.html).
  */
-export const SITE_URL = (import.meta.env.VITE_SITE_URL || "https://nexyronix.com").replace(
+export const SITE_URL = (import.meta.env.VITE_SITE_URL || "https://www.nexyronix.com").replace(
   /\/$/,
   ""
 );
