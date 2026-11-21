@@ -6,28 +6,24 @@
  * the serverless deployment — the request/response shapes are compatible, so
  * there is one implementation of the contact logic, not two.
  *
- *   npm run build   # typecheck, vite build -> dist/, esbuild this file -> dist-server/index.js
+ *   npm run build   # typecheck, vite build -> dist/, bundle this file -> dist-server/index.js
  *   npm start       # node dist-server/index.js
  *
- * The bundle inlines api/ and src/shared/, so at runtime the host only needs
- * dist/, dist-server/, package.json and the production node_modules
- * (express, compression). `npm run dev:server` runs this file unbundled via tsx.
+ * The bundle inlines server/app.ts, api/ and src/shared/, so at runtime the
+ * host only needs dist/, dist-server/, package.json and the production
+ * node_modules (express, compression). `npm run dev:server` runs this file
+ * unbundled via tsx.
  */
 
-import express from "express";
-import compression from "compression";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import contactHandler, { type ApiRequest, type ApiResponse } from "../api/contact";
+import { createApp } from "./app";
 
 // Named to avoid shadowing the __dirname global that @types/node declares.
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 // server/ (tsx) and dist-server/ (bundled) both sit one level below the
 // project root, so this resolves to the same dist/ either way.
 const distPath = path.resolve(moduleDir, "../dist");
-// Vite writes content-hashed build output here — the only files that are
-// safe to cache forever. Files copied from public/ land in dist/ itself.
-const hashedAssetsPath = path.join(distPath, "assets") + path.sep;
 
 // The platform injects PORT (Azure App Service, Railway). Never hard-code it,
 // and bind 0.0.0.0 — binding localhost makes the container unreachable.
@@ -44,13 +40,21 @@ const HOST = "0.0.0.0";
 const TRUST_PROXY_HOPS = readHopCount("TRUST_PROXY_HOPS", 1);
 
 /**
- * When set (e.g. "nexyronix.com"), requests for any other hostname —
- * www.nexyronix.com, <app>.azurewebsites.net — are permanently redirected
- * there. Leave it UNSET until the custom domain is bound to this deployment,
- * or pre-cutover testing on the platform's own hostname will bounce to
- * whichever host the domain currently points at.
+ * When set (e.g. "www.nexyronix.com"), requests for any other hostname —
+ * nexyronix.com, <app>.azurewebsites.net — are permanently redirected there.
+ * Leave it UNSET until the custom domain is bound to this deployment, or
+ * pre-cutover testing on the platform's own hostname will bounce to whichever
+ * host the domain currently points at. Never set it to a host that itself
+ * redirects back (today the apex forwards to www), or the two loop.
  */
 const CANONICAL_HOST = readCanonicalHost();
+
+/**
+ * Commit this server was built from. `npm run build` bakes it in at bundle
+ * time (scripts/build-server.mjs replaces this expression with a literal).
+ * Unbundled (`npm run dev:server`) it comes from the environment, if at all.
+ */
+const BUILD_SHA = process.env.BUILD_SHA || "development";
 
 // Longer than the Resend request timeout (10 s, api/contact.ts), so an
 // enquiry that is mid-send when the platform stops this instance completes.
@@ -58,186 +62,18 @@ const SHUTDOWN_TIMEOUT_MS = 15_000;
 
 let shuttingDown = false;
 
-const app = express();
-
-app.set("trust proxy", TRUST_PROXY_HOPS);
-
-// Don't advertise the framework.
-app.disable("x-powered-by");
-
-// While draining, tell keep-alive clients (including the platform's front end,
-// which pools connections) not to reuse this connection.
-app.use((_req, res, next) => {
-  if (shuttingDown) res.setHeader("Connection", "close");
-  next();
-});
-
-// Gzip/brotli text responses (HTML/CSS/JS/JSON) — meaningfully smaller
-// transfers for near-zero cost. Images/fonts are already compressed formats
-// and this middleware skips them on its own.
-app.use(compression());
-
-/**
- * Security headers.
- *
- * The enforced CSP is deliberately tested against what this site actually uses:
- * - 'unsafe-inline' on style-src: Tailwind injects inline styles, and several
- *   components set style={{...}} for animation delays. Without it, layout breaks.
- * - 'unsafe-eval' on script-src: some Three.js builds compile shaders this way.
- * - fonts.googleapis.com / fonts.gstatic.com: the webfonts.
- * - blob: and data: on img-src: WebGL canvas readback and inline SVG data URLs.
- *
- * A stricter candidate is sent alongside as Content-Security-Policy-Report-Only:
- * identical except script-src drops 'unsafe-inline' and 'unsafe-eval'. Browsers
- * never block anything because of it — they only log a console warning for
- * each script that WOULD have been blocked. Once a full pass over the site
- * (including both 3D scenes) logs no violations, promote it to the enforced
- * header. Add a `report-uri`/`report-to` directive if you want violations
- * collected centrally rather than read from DevTools.
- */
-function contentSecurityPolicy(scriptSrc: string): string {
-  return [
-    "default-src 'self'",
-    `script-src ${scriptSrc}`,
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com data:",
-    "img-src 'self' data: blob:",
-    "connect-src 'self'",
-    "worker-src 'self' blob:",
-    "frame-ancestors 'none'",
-    "base-uri 'self'",
-    "form-action 'self'",
-    "object-src 'none'",
-  ].join("; ");
-}
-
-const CSP = contentSecurityPolicy("'self' 'unsafe-inline' 'unsafe-eval'");
-const CSP_REPORT_ONLY = contentSecurityPolicy("'self'");
-
-app.use((_req, res, next) => {
-  res.setHeader("Content-Security-Policy", CSP);
-  res.setHeader("Content-Security-Policy-Report-Only", CSP_REPORT_ONLY);
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=()");
-  // Only meaningful over HTTPS; the platform's front end terminates TLS.
-  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  next();
-});
-
-// --- Canonical host ---------------------------------------------------------
-// Only active when CANONICAL_HOST is set. The health check is exempt: platform
-// probes reach the instance on internal hostnames and must get a plain 200.
-if (CANONICAL_HOST) {
-  app.use((req, res, next) => {
-    if (req.path === "/api/health") return next();
-
-    const host = (req.headers.host ?? "").trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
-    if (host === CANONICAL_HOST) return next();
-
-    // Only ever redirect to the configured host — never echo the request's
-    // Host header — and only with an origin-relative path.
-    const target = req.originalUrl.startsWith("/") ? req.originalUrl : "/";
-    // 308 preserves the method and body for non-GET requests (a form POST).
-    const status = req.method === "GET" || req.method === "HEAD" ? 301 : 308;
-    res.redirect(status, `https://${CANONICAL_HOST}${target}`);
-  });
-}
-
-// Body limit mirrors the cap enforced inside the handler. Sized for a
-// base64-encoded resume attachment (up to 5 MB raw, ~37% larger encoded)
-// plus the rest of the form fields — see api/contact.ts's MAX_BODY_BYTES.
-app.use(express.json({ limit: "8mb" }));
-
-// Body-parser failures get a clean JSON response with the correct status —
-// 413 for an oversized body, 415 for an unsupported encoding, otherwise 400 —
-// rather than an unhandled crash or a misleading generic error.
-app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (!isBodyParserError(err)) {
-    next(err);
-    return;
-  }
-  if (err.status === 413) {
-    res.status(413).json({ ok: false, message: "That request was too large." });
-  } else if (err.status === 415) {
-    res.status(415).json({ ok: false, message: "That request could not be read." });
-  } else {
-    res.status(400).json({ ok: false, message: "That request could not be read." });
-  }
-});
-
-// --- API ------------------------------------------------------------------
-// All methods reach the handler so a GET/PUT gets its proper 405 + Allow.
-app.all("/api/contact", (req, res) => {
-  void contactHandler(req as unknown as ApiRequest, res as unknown as ApiResponse);
-});
-
-// Liveness for the platform's health check. Reports 503 while draining so a
-// load balancer stops routing new traffic to an instance that is shutting down.
-app.get("/api/health", (_req, res) => {
-  if (shuttingDown) {
-    res.status(503).json({ ok: false, status: "shutting-down" });
-    return;
-  }
-  res.status(200).json({ ok: true });
-});
-
-// Unknown API routes answer in JSON, not with the HTML 404 page.
-app.use("/api", (_req, res) => {
-  res.status(404).json({ ok: false, message: "Not found." });
-});
-
-// --- Static frontend ------------------------------------------------------
-// Content-hashed build output (dist/assets/) is cached for a year; a changed
-// file gets a new name, so it can never go stale. Everything else (favicon,
-// og-image, robots.txt, sitemap.xml) keeps its name across deploys, so it
-// gets a short cache. HTML always revalidates.
-app.use(
-  express.static(distPath, {
-    index: false,
-    setHeaders(res, filePath) {
-      if (filePath.startsWith(hashedAssetsPath)) {
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      } else if (filePath.endsWith(".html")) {
-        res.setHeader("Cache-Control", "no-cache");
-      } else {
-        res.setHeader("Cache-Control", "public, max-age=3600");
-      }
-    },
-  })
-);
-
-function sendPage(res: express.Response, file: string, status = 200): void {
-  res.status(status);
-  res.setHeader("Cache-Control", "no-cache");
-  res.sendFile(path.join(distPath, file));
-}
-
-// Single-page site: "/" is the only route that returns the interactive app
-// shell. The legal pages are deliberately plain static HTML, not part of the
-// React bundle — nobody needs the 3D scene to read a privacy policy, and it
-// keeps them reachable at clean URLs without pulling in a router.
-app.get("/", (_req, res) => sendPage(res, "index.html"));
-app.get("/privacy-policy", (_req, res) => sendPage(res, "privacy-policy.html"));
-app.get("/terms-of-use", (_req, res) => sendPage(res, "terms-of-use.html"));
-
-// Anything else is genuinely not found — a real 404 status with a branded
-// page, not a silent 200 of the homepage.
-app.use((_req, res) => sendPage(res, "404.html", 404));
-
-// Last-resort handler: log internally, return nothing revealing.
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("[server] unhandled error:", err);
-  if (!res.headersSent) {
-    res.status(500).json({ ok: false, message: "Something went wrong. Please try again." });
-  }
+const app = createApp({
+  distPath,
+  trustProxyHops: TRUST_PROXY_HOPS,
+  canonicalHost: CANONICAL_HOST,
+  buildSha: BUILD_SHA,
+  isShuttingDown: () => shuttingDown,
 });
 
 const server = app.listen(PORT, HOST, () => {
   console.log(
     `Nexyronix server listening on http://${HOST}:${PORT} ` +
-      `(trust proxy hops: ${TRUST_PROXY_HOPS}, canonical host: ${CANONICAL_HOST || "off"})`
+      `(build ${BUILD_SHA}, trust proxy hops: ${TRUST_PROXY_HOPS}, canonical host: ${CANONICAL_HOST || "off"})`
   );
   // Names only — never values. Makes a misconfigured deployment obvious in
   // the platform's log stream instead of only when someone submits the form.
@@ -246,6 +82,18 @@ const server = app.listen(PORT, HOST, () => {
     console.warn(`[server] contact form will fail until these are set: ${missing.join(", ")}`);
   }
 });
+
+// --- Connection timeouts ------------------------------------------------------
+// Platform front ends pool connections to the app. Node's default 5 s
+// keep-alive is shorter than a pooling proxy's idle timeout, so the proxy can
+// reuse a connection Node has just closed, which surfaces as an occasional 502.
+// Keeping idle connections for 65 s avoids that; headersTimeout must be longer
+// still. requestTimeout bounds a slow-drip upload: 3 minutes still fits a
+// full-size resume on a slow mobile connection, and is under App Service's
+// 230 s front-end limit, so the app answers before the platform gives up.
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
+server.requestTimeout = 180_000;
 
 // --- Graceful shutdown ----------------------------------------------------
 // Platforms send SIGTERM before stopping an instance (restart, scale-in,
@@ -301,8 +149,4 @@ function readCanonicalHost(): string {
   if (/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(raw)) return raw;
   console.warn(`[server] ignoring invalid CANONICAL_HOST=${JSON.stringify(process.env.CANONICAL_HOST)}`);
   return "";
-}
-
-function isBodyParserError(err: unknown): err is { type: string; status?: number } {
-  return typeof err === "object" && err !== null && typeof (err as { type?: unknown }).type === "string";
 }
