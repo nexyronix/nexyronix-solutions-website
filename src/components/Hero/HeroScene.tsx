@@ -8,6 +8,11 @@ import type { DeviceTier } from "@/hooks/useDeviceTier";
 
 interface HeroSceneProps {
   tier: DeviceTier;
+  /**
+   * False while the hero is far off-screen: no frames are rendered (the last
+   * one stays on the canvas), so an unseen scene costs no GPU time or battery.
+   */
+  active?: boolean;
   onReady?: () => void;
 }
 
@@ -81,7 +86,7 @@ function CameraRig({ pointer }: { pointer: MutableRefObject<{ x: number; y: numb
   return null;
 }
 
-export function HeroScene({ tier, onReady }: HeroSceneProps) {
+export function HeroScene({ tier, active = true, onReady }: HeroSceneProps) {
   const pointer = useRef({ x: 0, y: 0 });
   const config = TIER_CONFIG[tier];
   const distanceZ = useCameraDistance();
@@ -97,6 +102,7 @@ export function HeroScene({ tier, onReady }: HeroSceneProps) {
 
   return (
     <Canvas
+      frameloop={active ? "always" : "never"}
       dpr={[1, tier === "high" ? 2 : 1.5]}
       camera={{ position: [0, 0, distanceZ], fov: 42 }}
       gl={{ antialias: true, powerPreference: "high-performance" }}

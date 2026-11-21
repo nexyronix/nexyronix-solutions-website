@@ -1,12 +1,13 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useRef, useState } from "react";
 import { Container } from "@/components/ui/Container";
 import { FilterPill } from "@/components/ui/FilterPill";
+import { SceneBoundary } from "@/components/SceneBoundary";
 import { UniverseFallback } from "./UniverseFallback";
 import { getTechNodes } from "./technologyNodesData";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { useWebGLSupport } from "@/hooks/useWebGLSupport";
 import { useDeviceTier } from "@/hooks/useDeviceTier";
-import { useInViewOnce } from "@/hooks/useInView";
+import { useInViewOnce, useViewportPresence } from "@/hooks/useInView";
 import { cn } from "@/lib/cn";
 
 // three.js / R3F / drei — only fetched when the scene will actually render.
@@ -24,6 +25,14 @@ export function TechnologyUniverse() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sceneReady, setSceneReady] = useState(false);
+
+  // The scene (and its second WebGL context) is created only once the visitor
+  // scrolls within ~800px of it, so it never competes with the hero during
+  // page load. It then renders frames only while within 200px of the
+  // viewport.
+  const sceneRef = useRef<HTMLDivElement>(null);
+  const { seen: sceneMounted } = useViewportPresence(sceneRef, "800px 0px");
+  const { near: sceneActive } = useViewportPresence(sceneRef, "200px 0px");
 
   const canRender3D = webglSupported && !reducedMotion;
   const displayId = selectedId ?? hoveredId;
@@ -96,28 +105,37 @@ export function TechnologyUniverse() {
 
           {/* RIGHT — the 3D universe (or its static substitute) */}
           <div className="lg:col-span-7">
-            <div className="relative h-[420px] overflow-hidden rounded-2xl border border-border sm:h-[520px] lg:h-[620px]">
+            <div
+              ref={sceneRef}
+              className="relative h-[420px] overflow-hidden rounded-2xl border border-border sm:h-[520px] lg:h-[620px]"
+            >
               {canRender3D ? (
                 <>
                   <div className="absolute inset-0">
                     <UniverseFallback />
                   </div>
-                  <Suspense fallback={null}>
-                    <div
-                      className={cn(
-                        "absolute inset-0 transition-opacity duration-700 ease-signature",
-                        sceneReady ? "opacity-100" : "opacity-0"
-                      )}
-                    >
-                      <UniverseScene
-                        tier={tier}
-                        activeId={displayId}
-                        onHover={setHoveredId}
-                        onSelect={toggleSelected}
-                        onReady={() => setSceneReady(true)}
-                      />
-                    </div>
-                  </Suspense>
+                  {/* A failed scene is dropped; the UniverseFallback beneath stays. */}
+                  {sceneMounted && (
+                    <SceneBoundary name="universe">
+                      <Suspense fallback={null}>
+                        <div
+                          className={cn(
+                            "absolute inset-0 transition-opacity duration-700 ease-signature",
+                            sceneReady ? "opacity-100" : "opacity-0"
+                          )}
+                        >
+                          <UniverseScene
+                            tier={tier}
+                            active={sceneActive}
+                            activeId={displayId}
+                            onHover={setHoveredId}
+                            onSelect={toggleSelected}
+                            onReady={() => setSceneReady(true)}
+                          />
+                        </div>
+                      </Suspense>
+                    </SceneBoundary>
+                  )}
                 </>
               ) : (
                 <UniverseFallback />

@@ -1,11 +1,13 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useRef, useState } from "react";
 import { Container } from "@/components/ui/Container";
+import { SceneBoundary } from "@/components/SceneBoundary";
 import { HeroContent } from "./HeroContent";
 import { HeroFallback } from "./HeroFallback";
 import { ScrollIndicator } from "./ScrollIndicator";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { useWebGLSupport } from "@/hooks/useWebGLSupport";
 import { useDeviceTier } from "@/hooks/useDeviceTier";
+import { useViewportPresence } from "@/hooks/useInView";
 import { cn } from "@/lib/cn";
 
 // three.js / R3F / drei are a heavy chunk — only fetched when the hero
@@ -19,10 +21,16 @@ export function Hero() {
   const tier = useDeviceTier();
   const [sceneReady, setSceneReady] = useState(false);
 
+  // The hero opens the page, so it starts "near". Once scrolled well past,
+  // the scene stops rendering frames (it keeps its last frame on screen) and
+  // resumes 200px before it scrolls back into view.
+  const sectionRef = useRef<HTMLElement>(null);
+  const { near: sceneActive } = useViewportPresence(sectionRef, "200px 0px", true);
+
   const canRender3D = webglSupported && !reducedMotion;
 
   return (
-    <section id="home" className="relative min-h-[100svh] overflow-hidden pt-18">
+    <section ref={sectionRef} id="home" className="relative min-h-[100svh] overflow-hidden pt-18">
       {/* Layer 0 — 3D scene (or its static, motion-free substitute). HeroScene
           zooms its camera out on narrower screens so the assembly shrinks
           (see its computeCameraDistance); the actual left/right shift to
@@ -36,17 +44,21 @@ export function Hero() {
             <div className="absolute inset-0 md:translate-x-[150px] lg:translate-x-[325px]">
               <HeroFallback />
             </div>
-            <Suspense fallback={null}>
-              <div
-                className={cn(
-                  "absolute inset-0 transition-opacity duration-700 ease-signature",
-                  "md:translate-x-[150px] lg:translate-x-[325px]",
-                  sceneReady ? "opacity-100" : "opacity-0"
-                )}
-              >
-                <HeroScene tier={tier} onReady={() => setSceneReady(true)} />
-              </div>
-            </Suspense>
+            {/* If the scene fails (WebGL error, chunk download failure), the
+                boundary drops it and the HeroFallback beneath stays visible. */}
+            <SceneBoundary name="hero">
+              <Suspense fallback={null}>
+                <div
+                  className={cn(
+                    "absolute inset-0 transition-opacity duration-700 ease-signature",
+                    "md:translate-x-[150px] lg:translate-x-[325px]",
+                    sceneReady ? "opacity-100" : "opacity-0"
+                  )}
+                >
+                  <HeroScene tier={tier} active={sceneActive} onReady={() => setSceneReady(true)} />
+                </div>
+              </Suspense>
+            </SceneBoundary>
           </>
         ) : (
           <div className="absolute inset-0 md:translate-x-[150px] lg:translate-x-[325px]">
