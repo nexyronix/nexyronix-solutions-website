@@ -1,10 +1,9 @@
 /**
- * Production server (Azure App Service, Railway, or any Node host).
+ * Production server (Azure App Service; any Node 24 host works the same way).
  *
  * Serves the built frontend from `dist/` and hosts the enquiry API on the same
- * origin, so no CORS configuration is needed. Reuses the exact same handler as
- * the serverless deployment — the request/response shapes are compatible, so
- * there is one implementation of the contact logic, not two.
+ * origin, so no CORS configuration is needed. The enquiry logic lives in
+ * api/contact.ts and is mounted by server/app.ts, so it exists exactly once.
  *
  *   npm run build   # typecheck, vite build -> dist/, bundle this file -> dist-server/index.js
  *   npm start       # node dist-server/index.js
@@ -25,8 +24,8 @@ const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 // project root, so this resolves to the same dist/ either way.
 const distPath = path.resolve(moduleDir, "../dist");
 
-// The platform injects PORT (Azure App Service, Railway). Never hard-code it,
-// and bind 0.0.0.0 — binding localhost makes the container unreachable.
+// The platform (Azure App Service) injects PORT. Never hard-code it, and bind
+// 0.0.0.0 — binding localhost makes the container unreachable.
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = "0.0.0.0";
 
@@ -34,7 +33,7 @@ const HOST = "0.0.0.0";
  * Number of reverse proxies in front of this process that append to
  * X-Forwarded-For. Express then takes the client address from the entry
  * those proxies added, ignoring anything the client wrote itself.
- *   1 = Azure App Service or Railway on their own (default)
+ *   1 = Azure App Service on its own (default)
  *   2 = e.g. Azure Front Door in front of App Service
  */
 const TRUST_PROXY_HOPS = readHopCount("TRUST_PROXY_HOPS", 1);

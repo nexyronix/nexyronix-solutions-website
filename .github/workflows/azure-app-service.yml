@@ -6,30 +6,28 @@
 #
 # SAFE BY DEFAULT: the deploy job is skipped until the repository variable
 # AZURE_WEBAPP_NAME exists. Until then every run only builds and tests, needs
-# no Azure resources, and touches nothing outside GitHub. Railway is not
-# involved in any step.
+# no Azure resources, and touches nothing outside GitHub.
 #
 # One-time setup (details in README -> "Deploying to Azure App Service"):
 #   Repository secrets   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
 #                        (identifiers of the Entra app / managed identity — not passwords)
 #   Repository variables AZURE_WEBAPP_NAME   (setting it enables deployment)
 #                        AZURE_WEBAPP_SLOT   (optional; defaults to "production")
-#   Environment          "production" — add required reviewers / branch rules there
-#   Federated credential subject:
-#                        repo:nexyronix/nexyronix-solutions-website:environment:production
+#   Environment          "production" — required reviewer; deployment branches: main
+#   Federated credential subject (GitHub's immutable format: owner and repo IDs):
+#     repo:nexyronix@319072383/nexyronix-solutions-website@1347450567:environment:production
 #
 # Each build embeds its commit SHA, which /api/health reports; the deploy job
 # only succeeds once Azure is serving that exact commit.
 #
-# The azure-migration branch is included so the Azure deployment can be
-# validated BEFORE anything is merged to main (which Railway deploys from).
-# Remove it from `on.push.branches` after cutover.
+# Production deploys come from main only: pushes to main deploy (after approval
+# in the production environment), pull requests into main build and test only.
 
 name: Azure App Service
 
 on:
   push:
-    branches: [main, azure-migration]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -67,7 +65,7 @@ jobs:
       # VITE_* values are baked into the browser bundle at build time, so they
       # must be provided here, not as App Settings. All optional: when a
       # repository variable is unset the value is empty and src/data/site.ts
-      # falls back to the real defaults. Mirror any overrides Railway has.
+      # falls back to the real defaults.
       - name: Typecheck and build (frontend + server bundle)
         env:
           VITE_CONTACT_EMAIL: ${{ vars.VITE_CONTACT_EMAIL }}
