@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/Button";
 
 interface FormSuccessProps {
@@ -5,11 +6,21 @@ interface FormSuccessProps {
 }
 
 export function FormSuccess({ onReset }: FormSuccessProps) {
+  // This panel replaces the form — including the submit button that had
+  // focus. Take focus so keyboard and screen-reader users land on the
+  // confirmation instead of being dropped back at the top of the page.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
   return (
     <div
+      ref={panelRef}
+      tabIndex={-1}
       role="status"
       aria-live="polite"
-      className="flex flex-col items-center rounded-2xl border border-accent-cyan/40 bg-surface/60 p-10 text-center backdrop-blur-sm"
+      className="flex flex-col items-center rounded-2xl border border-accent-cyan/40 bg-surface/60 p-10 text-center backdrop-blur-sm focus-visible:outline-none"
     >
       <span className="flex h-14 w-14 items-center justify-center rounded-full border border-accent-cyan/50 bg-accent-cyan/10">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">

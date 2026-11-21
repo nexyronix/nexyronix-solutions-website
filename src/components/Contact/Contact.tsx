@@ -95,8 +95,9 @@ export function Contact() {
           </div>
 
           <div className={cn("lg:col-span-7", REVEAL, revealed)} style={{ transitionDelay: "120ms" }}>
-            {/* Remount on path change so the preselected enquiry type applies */}
-            <ContactForm key={selected.id} presetType={selected.enquiryType} />
+            {/* Not keyed on the card: switching cards updates the enquiry type
+                and keeps whatever has already been typed (see ContactForm). */}
+            <ContactForm presetType={selected.enquiryType} />
           </div>
         </div>
 
