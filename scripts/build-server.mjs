@@ -6,7 +6,6 @@
 // instance it replaced. Source of the id, first match wins:
 //   BUILD_SHA               explicit override
 //   GITHUB_SHA              GitHub Actions
-//   RAILWAY_GIT_COMMIT_SHA  Railway
 //   git rev-parse HEAD      local builds ("-dirty" if tracked files changed)
 //   "unknown"
 import { build } from "esbuild";
@@ -26,7 +25,6 @@ function gitSha() {
 const buildSha =
   process.env.BUILD_SHA ||
   process.env.GITHUB_SHA ||
-  process.env.RAILWAY_GIT_COMMIT_SHA ||
   gitSha() ||
   "unknown";
 

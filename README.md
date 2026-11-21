@@ -44,12 +44,18 @@ The server reads `PORT`, binds `0.0.0.0`, answers `GET /api/health` with
 time by `scripts/build-server.mjs`, so a deployment can confirm the new build
 is actually serving.
 
-### Azure App Service (Linux) — prepared, not yet live
+### Azure App Service (Linux) — production
+
+Azure App Service is the only production host. `www.nexyronix.com` is bound to
+the web app `nexyronix-web-app` (resource group `nexyronix-production-rg`,
+Central India) with an App Service managed certificate.
 
 `.github/workflows/azure-app-service.yml` builds, runs `npm test`, and
-smoke-tests the deployment package on every push and pull request. It
-**deploys only once the `AZURE_WEBAPP_NAME` repository variable exists**,
-authenticating with OIDC — no publish profile or client secret is stored. A
+smoke-tests the deployment package on every push to `main` and every pull
+request into it. It **deploys only for pushes to `main` (and manual runs)**,
+only once the `AZURE_WEBAPP_NAME` repository variable exists, and each deploy
+**waits for approval** in the GitHub `production` environment. It
+authenticates with OIDC — no publish profile or client secret is stored. A
 deploy succeeds only when `/api/health` on the app reports the commit that was
 just deployed, not merely a 200 from the previous build.
 
@@ -60,23 +66,26 @@ One-time setup:
    publishing **off**, Health check path `/api/health`.
 2. **App Settings**: `CONTACT_EMAIL`, `SMTP_FROM`, `RESEND_API_KEY` (as a Key
    Vault reference via the app's managed identity), `NODE_ENV=production`,
-   `SCM_DO_BUILD_DURING_DEPLOYMENT=false`. Set `CANONICAL_HOST=www.nexyronix.com`
-   only **after** the custom domain is bound — see [Canonical domain](#canonical-domain).
-   Don't set `PORT`.
+   `SCM_DO_BUILD_DURING_DEPLOYMENT=false`. `CANONICAL_HOST` — see
+   [Canonical domain](#canonical-domain). Don't set `PORT`.
 3. **Startup command**: `node --enable-source-maps dist-server/index.js` (the
    workflow sets it on each deploy). Run node directly rather than `npm start`
    so SIGTERM reaches the server.
 4. **OIDC**: an Entra app registration or user-assigned managed identity with
-   a federated credential for
-   `repo:nexyronix/nexyronix-solutions-website:environment:production`,
-   granted *Website Contributor* on the web app only. Then add repository
-   secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, a
-   `production` environment, and finally the `AZURE_WEBAPP_NAME` variable
-   (optionally `AZURE_WEBAPP_SLOT`).
-
-The workflow also runs on the `azure-migration` branch so Azure can be
-validated before anything reaches `main`. Remove that branch from the trigger
-after cutover.
+   a federated credential whose subject is exactly
+   `repo:nexyronix@319072383/nexyronix-solutions-website@1347450567:environment:production`,
+   granted *Website Contributor* on the web app only. This repository uses
+   GitHub's *immutable* OIDC subject format, which includes the numeric owner
+   ID (`319072383`) and repository ID (`1347450567`), so a re-created or
+   renamed repository with the same name can't obtain the identity. A
+   credential written for the name-only form
+   (`repo:nexyronix/nexyronix-solutions-website:…`) does **not** match. Then
+   add repository secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+   `AZURE_SUBSCRIPTION_ID`, a `production` environment, and finally the
+   `AZURE_WEBAPP_NAME` variable (optionally `AZURE_WEBAPP_SLOT`).
+5. **GitHub `production` environment**: deployment branches limited to `main`,
+   with a required reviewer, so every deploy waits for approval. A manual run
+   on any other branch is refused by the environment.
 
 ### Canonical domain
 
@@ -90,24 +99,10 @@ answers **404 for every other path**. So:
 - `CANONICAL_HOST` must be `www.nexyronix.com`. **Never** set it to
   `nexyronix.com` while the forwarder exists: the app would send `www` to the
   bare domain and the forwarder would send it back — an endless redirect loop.
-- Set it only once `www.nexyronix.com` is bound to the Azure app. Until then,
-  every request to the `*.azurewebsites.net` address would redirect to `www`,
-  which still points at Railway.
-
-### Railway — current production until cutover
-
-`railway.json`: build `npm run build`, start `npm start`, healthcheck
-`/api/health`. `railway.json` and `vercel.json` are scheduled for removal after
-a successful Azure migration.
-
-**Before merging to `main`:** Railway redeploys from `main`. Check that its
-builder honours `"engines": { "node": "24.x" }` (or set its Node version
-explicitly), and that Railway's proxy appends exactly one `X-Forwarded-For`
-hop (otherwise set `TRUST_PROXY_HOPS`), or merge only at cutover.
-
-**Vercel (legacy):** `api/contact.ts` still works as a serverless function and
-`vercel.json` carries the enforced security headers, but the Express server is
-the maintained path.
+- `www.nexyronix.com` is bound to the Azure app, so `CANONICAL_HOST` can be
+  set; it is a separate, deliberate step and has not been done yet. Once set,
+  requests for any other hostname (for example the `*.azurewebsites.net`
+  address) redirect to `www` with their path kept; `/api/health` is exempt.
 
 ## Environment variables
 
@@ -242,9 +237,9 @@ would be worse than an explicit hook. The intended table shape is documented in 
 comment; if it's ever wired up, update the Privacy Policy, which states that submissions and
 resumes are not stored by the website.
 
-**Adapting to another host.** The handler uses a minimal request/response shape, so moving it to
-Netlify Functions, Lambda, or an Express route (`app.post('/api/contact', ...)`) is a signature
-change, not a rewrite.
+**Handler shape.** `api/contact.ts` uses a minimal request/response interface rather than
+Express types. `server/app.ts` mounts it at `POST /api/contact`, and the tests drive it through
+that same app.
 
 ## Note on contact details
 

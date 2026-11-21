@@ -1,9 +1,9 @@
 /**
  * POST /api/contact — enquiry submission handler.
  *
- * Deployment: this is a standard serverless function signature that works on
- * Vercel (`/api/contact.ts`) and adapts trivially to Netlify Functions, AWS
- * Lambda, or an Express route (see README).
+ * Mounted by server/app.ts at POST /api/contact. It uses the minimal
+ * ApiRequest / ApiResponse shapes below rather than Express types, which keeps
+ * it independent of the framework and lets the tests drive it directly.
  *
  * SECURITY POSTURE
  * - Every field is re-validated here. The client's validation is never trusted.
@@ -17,14 +17,10 @@
  * - Error responses are generic; internal failures are logged server-side only.
  *
  * EMAIL DELIVERY
- * Sends via the Resend HTTPS API (fetch, no SDK dependency), not SMTP.
- * Originally chosen because Railway blocks outbound SMTP (ports
- * 25/465/587/2525) below its Pro plan — confirmed by testing two providers
- * from that deployment, both failing with ETIMEDOUT at TCP connect. It is
- * kept on every host: an HTTPS call on port 443 isn't subject to the
- * SMTP-port restrictions cloud platforms commonly apply, so delivery works
- * the same on Azure App Service, Railway or anywhere else. To go back to
- * generic SMTP on a host that permits it, swap deliverEnquiry() for a
+ * Sends via the Resend HTTPS API (fetch, no SDK dependency), not SMTP. An
+ * HTTPS call on port 443 isn't subject to the outbound SMTP-port restrictions
+ * cloud platforms commonly apply, so delivery doesn't depend on the host's
+ * network policy. To use generic SMTP instead, swap deliverEnquiry() for a
  * nodemailer transport — nothing else in this file needs to change.
  */
 
@@ -175,8 +171,8 @@ export function sendRateLimited(res: ApiResponse): void {
  *
  * - Under Express (server/index.ts), `req.ip` is already resolved from the
  *   header using the configured trusted-hop count — that's authoritative.
- * - Without a framework (serverless), fall back to the rightmost entry, which
- *   is the one the platform's own edge appended.
+ * - If `req.ip` is unset (the handler called without Express), fall back to
+ *   the rightmost entry, which is the one the platform's own edge appended.
  */
 function clientIp(req: ApiRequest): string {
   if (req.ip) return rateLimitKey(req.ip);
