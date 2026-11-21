@@ -20,11 +20,15 @@ export interface SocialLink {
 export const SOCIAL_LINKS: SocialLink[] = [];
 
 /**
- * Canonical origin, used for canonical tags, Open Graph URLs and the sitemap.
- * Override per-environment with VITE_SITE_URL. The default is the intended
- * production domain; nothing here assumes DNS is live yet.
+ * Canonical origin. Override per-environment with VITE_SITE_URL.
+ *
+ * NOTE: nothing imports this yet. The canonical tag, Open Graph URLs, sitemap
+ * and robots.txt are static files with https://www.nexyronix.com hard-coded
+ * (index.html, public/sitemap.xml, public/robots.txt, the legal pages), so
+ * changing VITE_SITE_URL alone does not change them. www, not the bare
+ * domain: the bare domain only forwards "/" to www (see index.html).
  */
-export const SITE_URL = (import.meta.env.VITE_SITE_URL || "https://nexyronix.com").replace(
+export const SITE_URL = (import.meta.env.VITE_SITE_URL || "https://www.nexyronix.com").replace(
   /\/$/,
   ""
 );

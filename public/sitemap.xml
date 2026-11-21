@@ -5,21 +5,31 @@
   same document and listing them adds noise. Privacy Policy and Terms of Use
   ARE real, separate static pages (public/privacy-policy.html,
   public/terms-of-use.html), so they're genuinely distinct URLs worth listing.
-  Update the domain here if you deploy somewhere other than nexyronix.com.
+
+  Every URL uses https://www.nexyronix.com — the host that serves the site
+  (the bare domain only forwards "/" to www; see index.html).
+
+  <lastmod> is the date that page's CONTENT last changed (from git history),
+  not the date of the latest deploy. Update it only when a page's visible
+  content changes; search engines stop trusting lastmod that changes on
+  every build.
 -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://nexyronix.com/</loc>
+    <loc>https://www.nexyronix.com/</loc>
+    <lastmod>2026-09-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://nexyronix.com/privacy-policy</loc>
+    <loc>https://www.nexyronix.com/privacy-policy</loc>
+    <lastmod>2026-09-01</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://nexyronix.com/terms-of-use</loc>
+    <loc>https://www.nexyronix.com/terms-of-use</loc>
+    <lastmod>2026-09-01</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>

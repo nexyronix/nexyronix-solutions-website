@@ -11,6 +11,11 @@ import type { DeviceTier } from "@/hooks/useDeviceTier";
 
 interface UniverseSceneProps {
   tier: DeviceTier;
+  /**
+   * False while the section is off-screen: no frames are rendered (the last
+   * one stays on the canvas), so an unseen scene costs no GPU time or battery.
+   */
+  active?: boolean;
   activeId: string | null;
   onHover: (id: string | null) => void;
   onSelect: (id: string) => void;
@@ -26,7 +31,7 @@ const TIER_CONFIG: Record<
   low: { particles: 180, nodeCount: 6, secondary: false, coreDetail: 0 },
 };
 
-export function UniverseScene({ tier, activeId, onHover, onSelect, onReady }: UniverseSceneProps) {
+export function UniverseScene({ tier, active = true, activeId, onHover, onSelect, onReady }: UniverseSceneProps) {
   const config = TIER_CONFIG[tier];
   const nodes = getTechNodes(config.nodeCount);
   const activeNode = nodes.find((n) => n.id === activeId) ?? null;
@@ -34,6 +39,7 @@ export function UniverseScene({ tier, activeId, onHover, onSelect, onReady }: Un
 
   return (
     <Canvas
+      frameloop={active ? "always" : "never"}
       dpr={[1, tier === "high" ? 2 : 1.5]}
       camera={{ position: [0, 0.6, 7.5], fov: 44 }}
       gl={{ antialias: true, powerPreference: "high-performance" }}

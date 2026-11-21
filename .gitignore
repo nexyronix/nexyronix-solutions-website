@@ -1,6 +1,11 @@
 node_modules/
 dist/
+dist-server/
 .vite/
+
+# Deployment packages assembled locally or in CI
+/deploy/
+/app.zip
 
 # Never commit real environment values
 .env

@@ -96,8 +96,20 @@ export function ResumeUploadField({ value, error, onChange }: ResumeUploadFieldP
     setSelectedSize(null);
     setLocalError(null);
     onChange(null);
-    if (inputRef.current) inputRef.current.value = "";
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      // The Remove button is about to disappear; keep keyboard focus in the
+      // field instead of losing it to <body>.
+      inputRef.current.focus();
+    }
   }
+
+  // The real <input> is visually hidden, so its keyboard focus is shown on the
+  // visible box instead — the same ring the other form fields use. `peer`
+  // requires the input to come BEFORE the box in the DOM.
+  const focusRing = shownError
+    ? "peer-focus-visible:ring-2 peer-focus-visible:ring-red-400/30"
+    : "peer-focus-visible:ring-2 peer-focus-visible:ring-accent-cyan/40 peer-focus-visible:border-accent-cyan/50";
 
   return (
     <div className="sm:col-span-2">
@@ -106,11 +118,23 @@ export function ResumeUploadField({ value, error, onChange }: ResumeUploadFieldP
         <span className="ml-2 normal-case tracking-normal text-text-faint">(optional)</span>
       </label>
 
+      <input
+        ref={inputRef}
+        id={id}
+        type="file"
+        accept={ACCEPT}
+        aria-invalid={Boolean(shownError)}
+        aria-describedby={shownError ? errorId : undefined}
+        onChange={handleFileChange}
+        className="peer sr-only"
+      />
+
       {value && selectedName ? (
         <div
           className={cn(
-            "flex items-center justify-between gap-3 rounded-lg border bg-bg/60 px-4 py-3",
-            shownError ? "border-red-400/60" : "border-border"
+            "flex items-center justify-between gap-3 rounded-lg border bg-bg/60 px-4 py-3 transition-all duration-200",
+            shownError ? "border-red-400/60" : "border-border",
+            focusRing
           )}
         >
           <div className="flex min-w-0 items-center gap-2.5">
@@ -136,7 +160,8 @@ export function ResumeUploadField({ value, error, onChange }: ResumeUploadFieldP
           className={cn(
             "flex h-12 cursor-pointer items-center justify-between rounded-lg border bg-bg/60 px-4 text-sm transition-all duration-200",
             "text-text-faint hover:border-border-strong",
-            shownError ? "border-red-400/60" : "border-border"
+            shownError ? "border-red-400/60" : "border-border",
+            focusRing
           )}
         >
           <span>Choose a file — PDF, DOC or DOCX, up to {MAX_MB} MB</span>
@@ -145,17 +170,6 @@ export function ResumeUploadField({ value, error, onChange }: ResumeUploadFieldP
           </span>
         </label>
       )}
-
-      <input
-        ref={inputRef}
-        id={id}
-        type="file"
-        accept={ACCEPT}
-        aria-invalid={Boolean(shownError)}
-        aria-describedby={shownError ? errorId : undefined}
-        onChange={handleFileChange}
-        className="sr-only"
-      />
 
       {shownError && (
         <p id={errorId} className="mt-1.5 text-xs text-red-400">

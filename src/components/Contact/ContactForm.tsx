@@ -1,7 +1,8 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { FormField } from "./FormField";
 import { ResumeUploadField } from "./ResumeUploadField";
 import { FormSuccess, FormError } from "./FormStatus";
+import { acceptsResume, initialEnquiry, withField } from "./formState";
 import { Button } from "@/components/ui/Button";
 import { ArrowIcon } from "@/components/ui/ArrowIcon";
 import {
@@ -10,52 +11,42 @@ import {
   ENQUIRY_TYPES,
   BUDGET_OPTIONS,
   SOURCE_OPTIONS,
-  RESUME_ENQUIRY_TYPES,
   type EnquiryPayload,
   type FieldErrors,
 } from "@/shared/enquiry";
 
 type Status = "idle" | "submitting" | "success" | "error";
 
-const EMPTY: EnquiryPayload = {
-  name: "",
-  email: "",
-  phone: "",
-  organization: "",
-  enquiryType: "",
-  budget: "",
-  source: "",
-  message: "",
-  website: "",
-};
+/** Where keyboard focus should go after the next render. */
+type FocusRequest = { target: "first-invalid" | "first-field"; seq: number };
 
 interface ContactFormProps {
-  /** Preselects the enquiry type when arriving from one of the three option cards. */
+  /**
+   * Enquiry type chosen through one of the three option cards. Preselected on
+   * first render; when it changes later, only the enquiry type is updated —
+   * everything the visitor already typed is kept.
+   */
   presetType?: string;
 }
 
 export function ContactForm({ presetType }: ContactFormProps) {
-  const [values, setValues] = useState<EnquiryPayload>(() =>
-    presetType ? { ...EMPTY, enquiryType: presetType } : EMPTY
-  );
+  const [values, setValues] = useState<EnquiryPayload>(() => initialEnquiry(presetType));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState("");
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
 
+  const formRef = useRef<HTMLFormElement>(null);
   // Guards against double submission even if the button state is bypassed
   const inFlight = useRef(false);
+  const appliedPreset = useRef(presetType);
+
+  function requestFocus(target: FocusRequest["target"]) {
+    setFocusRequest((current) => ({ target, seq: (current?.seq ?? 0) + 1 }));
+  }
 
   function setField<K extends keyof EnquiryPayload>(key: K, value: EnquiryPayload[K]) {
-    setValues((current) => {
-      const next = { ...current, [key]: value };
-      // Resume only makes sense for Internship / Career — drop it (and its
-      // error) if the enquiry type changes to something it isn't offered
-      // for, so a stale attachment can't silently ride along on submit.
-      if (key === "enquiryType" && !RESUME_ENQUIRY_TYPES.includes(value as (typeof RESUME_ENQUIRY_TYPES)[number])) {
-        next.resume = undefined;
-      }
-      return next;
-    });
+    setValues((current) => withField(current, key, value));
     // Clear a field's error as soon as the user starts correcting it
     setErrors((current) => {
       if (!current[key]) return current;
@@ -66,6 +57,41 @@ export function ContactForm({ presetType }: ContactFormProps) {
     });
   }
 
+  // A different option card was chosen. Previously the whole form was
+  // remounted, which wiped anything already typed; now only the enquiry type
+  // follows the card. After a successful submission the card starts a fresh
+  // enquiry of that type, as it did before.
+  useEffect(() => {
+    if (presetType === appliedPreset.current) return;
+    appliedPreset.current = presetType;
+    if (!presetType) return;
+
+    if (status === "success") {
+      setValues(initialEnquiry(presetType));
+      setErrors({});
+      setErrorMessage("");
+      setStatus("idle");
+      return;
+    }
+    setField("enquiryType", presetType);
+    // Runs only when the chosen card changes; status is read, not tracked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetType]);
+
+  // Move focus once the DOM reflects the change: to the first field with an
+  // error after a failed submit, or to the first field after "Send another".
+  // Each request is honoured once, so later status changes never steal focus.
+  const handledFocusSeq = useRef(0);
+  useEffect(() => {
+    if (!focusRequest || focusRequest.seq === handledFocusSeq.current || status === "success") return;
+    const form = formRef.current;
+    if (!form) return;
+    handledFocusSeq.current = focusRequest.seq;
+    const selector =
+      focusRequest.target === "first-invalid" ? '[aria-invalid="true"]' : "input, select, textarea";
+    form.querySelector<HTMLElement>(selector)?.focus();
+  }, [focusRequest, status]);
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (inFlight.current) return;
@@ -75,6 +101,7 @@ export function ContactForm({ presetType }: ContactFormProps) {
       setErrors(found);
       setStatus("error");
       setErrorMessage("Please check the highlighted fields and try again.");
+      requestFocus("first-invalid");
       return;
     }
 
@@ -94,7 +121,10 @@ export function ContactForm({ presetType }: ContactFormProps) {
 
       if (!response.ok) {
         // The server re-validates; surface its field errors if it sent any
-        if (data?.errors) setErrors(data.errors as FieldErrors);
+        if (data?.errors) {
+          setErrors(data.errors as FieldErrors);
+          requestFocus("first-invalid");
+        }
         setStatus("error");
         setErrorMessage(
           typeof data?.message === "string"
@@ -105,7 +135,7 @@ export function ContactForm({ presetType }: ContactFormProps) {
       }
 
       setStatus("success");
-      setValues(EMPTY);
+      setValues(initialEnquiry(presetType));
     } catch {
       setStatus("error");
       setErrorMessage(
@@ -117,10 +147,13 @@ export function ContactForm({ presetType }: ContactFormProps) {
   }
 
   function handleReset() {
-    setValues(EMPTY);
+    setValues(initialEnquiry(presetType));
     setErrors({});
     setStatus("idle");
     setErrorMessage("");
+    // The success panel (and its button) is about to disappear — put focus
+    // back at the start of the fresh form rather than losing it to <body>.
+    requestFocus("first-field");
   }
 
   if (status === "success") {
@@ -131,6 +164,7 @@ export function ContactForm({ presetType }: ContactFormProps) {
 
   return (
     <form
+      ref={formRef}
       onSubmit={handleSubmit}
       noValidate
       className="rounded-2xl border border-border bg-surface/50 p-6 backdrop-blur-sm sm:p-8"
@@ -181,7 +215,7 @@ export function ContactForm({ presetType }: ContactFormProps) {
           onChange={(v) => setField("enquiryType", v)}
         />
 
-        {RESUME_ENQUIRY_TYPES.includes(values.enquiryType as (typeof RESUME_ENQUIRY_TYPES)[number]) && (
+        {acceptsResume(values.enquiryType) && (
           <ResumeUploadField
             value={values.resume ?? null}
             error={errors.resume}

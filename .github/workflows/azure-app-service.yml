@@ -1,0 +1,201 @@
+# Build, verify and deploy the site to Azure App Service (Linux, Node.js 24).
+#
+# Authentication is OpenID Connect (OIDC): GitHub mints a short-lived token per
+# run and Azure exchanges it for access. No publish profile, password or client
+# secret is stored anywhere.
+#
+# SAFE BY DEFAULT: the deploy job is skipped until the repository variable
+# AZURE_WEBAPP_NAME exists. Until then every run only builds and tests, needs
+# no Azure resources, and touches nothing outside GitHub. Railway is not
+# involved in any step.
+#
+# One-time setup (details in README -> "Deploying to Azure App Service"):
+#   Repository secrets   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#                        (identifiers of the Entra app / managed identity — not passwords)
+#   Repository variables AZURE_WEBAPP_NAME   (setting it enables deployment)
+#                        AZURE_WEBAPP_SLOT   (optional; defaults to "production")
+#   Environment          "production" — add required reviewers / branch rules there
+#   Federated credential subject:
+#                        repo:nexyronix/nexyronix-solutions-website:environment:production
+#
+# Each build embeds its commit SHA, which /api/health reports; the deploy job
+# only succeeds once Azure is serving that exact commit.
+#
+# The azure-migration branch is included so the Azure deployment can be
+# validated BEFORE anything is merged to main (which Railway deploys from).
+# Remove it from `on.push.branches` after cutover.
+
+name: Azure App Service
+
+on:
+  push:
+    branches: [main, azure-migration]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azure-app-service-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      # VITE_* values are baked into the browser bundle at build time, so they
+      # must be provided here, not as App Settings. All optional: when a
+      # repository variable is unset the value is empty and src/data/site.ts
+      # falls back to the real defaults. Mirror any overrides Railway has.
+      - name: Typecheck and build (frontend + server bundle)
+        env:
+          VITE_CONTACT_EMAIL: ${{ vars.VITE_CONTACT_EMAIL }}
+          VITE_CONTACT_PHONE: ${{ vars.VITE_CONTACT_PHONE }}
+          VITE_CONTACT_LOCATION: ${{ vars.VITE_CONTACT_LOCATION }}
+        run: npm run build
+
+      # Unit, API and server tests, plus checks on the build output itself
+      # (www canonical URLs, three.js kept off the initial page load, embedded
+      # build id). GitHub sets CI=true, which makes the build-output checks
+      # mandatory instead of skippable.
+      - name: Run tests
+        run: npm test
+
+      # Exactly what runs on App Service: the static build, the bundled server,
+      # and production-only node_modules installed here on Linux (so any
+      # platform-specific binaries match the host). No source, no dev tooling.
+      - name: Assemble deployment package
+        run: |
+          rm -rf deploy app.zip
+          mkdir deploy
+          cp -R dist dist-server package.json package-lock.json deploy/
+          (cd deploy && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
+          (cd deploy && zip -qr ../app.zip .)
+          du -sh deploy app.zip
+
+      - name: Smoke-test the package
+        working-directory: deploy
+        env:
+          PORT: "8080"
+        run: |
+          node --enable-source-maps dist-server/index.js > ../server.log 2>&1 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:8080/api/health > /dev/null && break
+            sleep 1
+          done
+          status() { curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$1"; }
+          test "$(status /api/health)" = "200"
+          # The package reports the commit it was built from.
+          health="$(curl -fs http://127.0.0.1:8080/api/health)"
+          echo "health: $health"
+          test "$(jq -r .version <<< "$health")" = "$GITHUB_SHA"
+          test "$(status /)" = "200"
+          test "$(status /privacy-policy)" = "200"
+          test "$(status /terms-of-use)" = "200"
+          test "$(status /does-not-exist)" = "404"
+          test "$(status /api/contact)" = "405"
+          # Here-strings, not pipes: under the runner's `-o pipefail`, `grep -q`
+          # exiting early can SIGPIPE curl and fail the step intermittently.
+          headers="$(curl -fsSI http://127.0.0.1:8080/)"
+          grep -qi '^content-security-policy:' <<< "$headers"
+          grep -qi '^strict-transport-security:' <<< "$headers"
+          kill "$SERVER_PID"
+          cat ../server.log
+
+      - name: Upload deployment package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app
+          path: app.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy to Azure App Service
+    needs: build
+    if: >-
+      vars.AZURE_WEBAPP_NAME != '' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.webapp-url }}
+    permissions:
+      contents: read
+      id-token: write # required to request the OIDC token
+    concurrency:
+      group: azure-app-service-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Download deployment package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # App Settings must include SCM_DO_BUILD_DURING_DEPLOYMENT=false: the
+      # package is already built, and a server-side rebuild would fail without
+      # devDependencies.
+      - name: Deploy package
+        id: deploy
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          slot-name: ${{ vars.AZURE_WEBAPP_SLOT || 'production' }}
+          package: app.zip
+          type: zip
+          clean: true
+          restart: true
+          # Run node directly (not via npm) so SIGTERM reaches the server and
+          # graceful shutdown works on restarts, scale-in and slot swaps.
+          startup-command: node --enable-source-maps dist-server/index.js
+
+      # A plain 200 isn't proof: right after a deploy the PREVIOUS build can
+      # still be answering while the new one starts. Wait until the health
+      # check reports this run's commit.
+      - name: Verify the new build is serving
+        env:
+          WEBAPP_URL: ${{ steps.deploy.outputs.webapp-url }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          url="${WEBAPP_URL%/}/api/health"
+          for i in $(seq 1 30); do
+            version="$(curl -fsS --max-time 10 "$url" | jq -r '.version // empty' || true)"
+            if [ "$version" = "$EXPECTED_SHA" ]; then
+              echo "Healthy and serving $version: $url"
+              exit 0
+            fi
+            echo "Attempt $i/30: serving '${version:-no healthy response}', waiting for $EXPECTED_SHA"
+            sleep 10
+          done
+          echo "::error::$url did not report build $EXPECTED_SHA within 5 minutes"
+          exit 1

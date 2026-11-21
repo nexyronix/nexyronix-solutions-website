@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Container } from "@/components/ui/Container";
 import { Logo } from "@/components/ui/Logo";
 import { Button } from "@/components/ui/Button";
@@ -18,6 +18,7 @@ const NAV_LINKS = [
 export function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -31,6 +32,28 @@ export function Navbar() {
     document.body.style.overflow = menuOpen ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
+    };
+  }, [menuOpen]);
+
+  // While the menu is open: Escape closes it and returns focus to the toggle,
+  // and widening to the desktop layout (where the panel is hidden) closes it
+  // so the scroll lock above can't outlive a menu nobody can see.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenuOpen(false);
+      toggleRef.current?.focus();
+    };
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const onBreakpoint = (e: MediaQueryListEvent) => {
+      if (e.matches) setMenuOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    desktop.addEventListener("change", onBreakpoint);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      desktop.removeEventListener("change", onBreakpoint);
     };
   }, [menuOpen]);
 
@@ -71,10 +94,12 @@ export function Navbar() {
 
           {/* Mobile menu toggle */}
           <button
+            ref={toggleRef}
             type="button"
             className="flex h-10 w-10 items-center justify-center rounded-md border border-border text-text lg:hidden"
             aria-label={menuOpen ? "Close menu" : "Open menu"}
             aria-expanded={menuOpen}
+            aria-controls="mobile-menu"
             onClick={() => setMenuOpen((v) => !v)}
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -97,11 +122,16 @@ export function Navbar() {
         </nav>
       </Container>
 
-      {/* Mobile menu panel */}
+      {/* Mobile menu panel. Collapsing to zero height alone leaves the links
+          focusable — keyboard users would tab through 8 invisible links.
+          `invisible` (visibility: hidden) removes them from the tab order and
+          the accessibility tree; transitioning visibility alongside the rows
+          delays it until the collapse animation has finished. */}
       <div
+        id="mobile-menu"
         className={cn(
-          "grid overflow-hidden bg-bg-elevated/98 backdrop-blur-md transition-[grid-template-rows] duration-300 ease-signature lg:hidden",
-          menuOpen ? "grid-rows-[1fr] border-b border-border" : "grid-rows-[0fr]"
+          "grid overflow-hidden bg-bg-elevated/98 backdrop-blur-md transition-[grid-template-rows,visibility] duration-300 ease-signature lg:hidden",
+          menuOpen ? "visible grid-rows-[1fr] border-b border-border" : "invisible grid-rows-[0fr]"
         )}
       >
         <div className="overflow-hidden">
